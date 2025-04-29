@@ -41,6 +41,7 @@ export const perlinCubeFSText = `
     varying vec2 uv;
     varying float vBlockType;
     varying vec3 modelPos;
+
     // Random and noise utility functions
     float random(in vec2 pt, in float seed) {
         return fract(sin((seed + dot(pt.xy, vec2(12.9898, 78.233)))) * 43758.5453123);
@@ -320,9 +321,7 @@ export const perlinCubeFSText = `
         vec4 lightSpacePos = uLightViewProj * wsPos;
         lightSpacePos /= lightSpacePos.w;
         vec2 shadowTexCoord = lightSpacePos.xy * 0.5 + 0.5;
-
-        // Calculate true geometric distance between light and fragment
-        float trueDistance = length(uLightPos.xyz - wsPos.xyz);
+        float fragmentDepthInLight = lightSpacePos.z * 0.5 + 0.5;
 
         // Sample depth from shadow map
         float depthFromMap = texture2D(uShadowMap, shadowTexCoord).r;
@@ -335,7 +334,7 @@ export const perlinCubeFSText = `
         for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {
             float pcfDepth = texture2D(uShadowMap, shadowTexCoord + vec2(x, y) * texelSize).r;
-            shadow += (trueDistance - bias) > pcfDepth ? 1.0 : 0.0;
+            shadow += (fragmentDepthInLight - bias) > pcfDepth ? 1.0 : 0.0;
         }
         }
         shadow /= 9.0;
@@ -347,32 +346,74 @@ export const perlinCubeFSText = `
         float ambientStrength = 0.2 + 0.8 * max(0.0, sin(uTimeOfDay * 3.14159));
         
         // Lighting calculation
-        // vec3 ka = kd * 0.3; // Ambient is based on diffuse
         vec3 ka = kd * ambientStrength;
         
         /* Compute light fall off */
         vec4 lightDirection = uLightPos - wsPos;
         float dot_nl = dot(normalize(lightDirection), normalize(normal));
         dot_nl = clamp(dot_nl, 0.0, 1.0);
+
+        // light for shadow
+        vec3 directLight = (1.0 - shadow) * dot_nl * kd;
         
-        gl_FragColor = vec4(clamp(ka + dot_nl * kd, 0.0, 1.0), 1.0);
+        //gl_FragColor = vec4(clamp(ka + dot_nl * kd, 0.0, 1.0), 1.0);
+        // Final color = ambient + direct light
+        vec3  finalColor = ka + directLight;
+
+        gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
     }
 `;
 
 export const shadowVSText = `
-  precision mediump float;
-  attribute vec4 aVertPos;
-  attribute vec4 aOffset;
-  uniform mat4 uLightViewProj;
+    precision mediump float;
 
-  void main() {
-    gl_Position = uLightViewProj * (aVertPos + aOffset);
-  }
+    attribute vec4 aVertPos;
+    attribute vec4 aOffset;
+
+    uniform mat4 uLightViewProj;
+
+    varying vec4 vClipSpacePos;
+
+    void main() {
+        vec4 worldPos = aVertPos + aOffset;
+        vClipSpacePos = uLightViewProj * worldPos;
+        gl_Position = vClipSpacePos;
+    }
 `;
 
 export const shadowFSText = `
-  precision mediump float;
-  void main() {
-    // No color output, only depth
-  }
+    precision mediump float;
+
+    varying vec4 vClipSpacePos;
+
+    void main() {
+    vec3 ndc = vClipSpacePos.xyz / vClipSpacePos.w;
+    float depth = ndc.z * 0.5 + 0.5;
+    gl_FragColor = vec4(depth); // store in red channel
+    }
+
 `;
+export const debugQuadVSText = `
+    precision mediump float;
+
+    attribute vec2 aPosition;
+    varying vec2 vUV;
+
+    void main() {
+        vUV = aPosition * 0.5 + 0.5; // map [-1,1] to [0,1]
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+    }
+`;
+
+export const debugQuadFSText = `
+   precision mediump float;
+uniform sampler2D uTexture;
+varying vec2 vUV;
+
+void main() {
+    vec4 color = texture2D(uTexture, vUV);
+    gl_FragColor = color; // Show full color, not just .r!
+}
+
+`;
+

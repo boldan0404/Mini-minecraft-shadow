@@ -8,7 +8,9 @@ import {
   perlinCubeVSText,
   perlinCubeFSText,
   shadowVSText,
-  shadowFSText
+  shadowFSText,
+  debugQuadVSText,
+  debugQuadFSText
 } from "./Shaders.js";
 import { Mat4, Vec4, Vec3 } from "../lib/TSM.js";
 import { RenderPass } from "../lib/webglutils/RenderPass.js";
@@ -62,6 +64,7 @@ export class MinecraftAnimation extends CanvasAnimation {
   private lightViewProjMatrix: Mat4;
   private shadowRenderPass: RenderPass;
 
+  private debugQuadRenderPass: RenderPass;
 
   constructor(canvas: HTMLCanvasElement) {
     super(canvas);
@@ -77,9 +80,7 @@ export class MinecraftAnimation extends CanvasAnimation {
 
     this.gui = new GUI(this.canvas2d, this);
     this.playerPosition = new Vec3([0, 100, 0]);
-    //jerry
-    // this.playerVelocity = new Vec3([0, 0, 0]);
-    // this.isOnGround = false;
+
     this.gui.getCamera().setPos(this.playerPosition);
 
     // Initialize blank cube rendering
@@ -94,42 +95,57 @@ export class MinecraftAnimation extends CanvasAnimation {
     this.generateInitialChunks();
     //shadow mapping
     this.initShadowMap();
+    // this.initDebugQuad();
   }
 
   // shadow mapping
   private initShadowMap(): void {
     const gl = this.ctx;
 
-    // Framebuffer
-    this.shadowFramebuffer = gl.createFramebuffer()!;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
-
-    // Depth texture
+    // 1. Create a color texture for depth-to-color storage
     this.shadowTexture = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, this.shadowMapSize, this.shadowMapSize, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.RGBA,
+      this.shadowMapSize, this.shadowMapSize, 0,
+      gl.RGBA, gl.UNSIGNED_BYTE, null
+    );
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    // Attach depth texture
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.shadowTexture, 0);
+    // 2. Create framebuffer and attach the color texture
+    this.shadowFramebuffer = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+      gl.TEXTURE_2D, this.shadowTexture, 0
+    );
 
-    // Disable color writes
-    gl.drawBuffers([]);
-
+    // 3. Check framebuffer status
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-      console.error("⚠️ Shadow framebuffer not complete");
+      console.error("⚠️ Shadow framebuffer incomplete!");
+    } else {
+      console.log("✅ Shadow framebuffer created successfully.");
     }
 
+    // 4. Cleanup
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-    // === Shadow Render Pass (simple shader) ===
+    // === Setup the shadow render pass ===
     this.shadowRenderPass = new RenderPass(gl, shadowVSText, shadowFSText);
     this.shadowRenderPass.setIndexBufferData(this.cubeGeometry.indicesFlat());
-    this.shadowRenderPass.addAttribute("aVertPos", 4, gl.FLOAT, false, 4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined, this.cubeGeometry.positionsFlat());
-    this.shadowRenderPass.addInstancedAttribute("aOffset", 4, gl.FLOAT, false, 4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined, new Float32Array(0));
+    this.shadowRenderPass.addAttribute(
+      "aVertPos", 4, gl.FLOAT, false,
+      4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
+      this.cubeGeometry.positionsFlat()
+    );
+    this.shadowRenderPass.addInstancedAttribute(
+      "aOffset", 4, gl.FLOAT, false,
+      4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
+      new Float32Array(0)
+    );
     this.shadowRenderPass.addUniform("uLightViewProj", (gl, loc) => {
       gl.uniformMatrix4fv(loc, false, new Float32Array(this.lightViewProjMatrix.all()));
     });
@@ -137,13 +153,14 @@ export class MinecraftAnimation extends CanvasAnimation {
     this.shadowRenderPass.setup();
   }
 
+
   public jump() {
-    console.log("🔼 jump() called | isGrounded:", this.isGrounded);
+    // console.log("🔼 jump() called | isGrounded:", this.isGrounded);
     if (this.isGrounded) {
       // this.velocityY = this.JUMP_VELOCITY;
       this.isGrounded = false;
       this.playerPosition.y += this.JUMP_VELOCITY * this.COLLISION_STEP;
-      console.log("🆙 Jump triggered: velocityY =", this.velocityY.toFixed(2));
+      // console.log("🆙 Jump triggered: velocityY =", this.velocityY.toFixed(2));
     }
   }
 
@@ -277,30 +294,40 @@ export class MinecraftAnimation extends CanvasAnimation {
     const walkDelta = this.gui.walkDir();
     const gl = this.ctx;
 
-    // 1. Day-night cycle
+    // // 1. Day-night cycle
     this.updateDayNightCycle();
 
-    // 2. Update light view-projection matrix (for shadows)
+    // 2. Update Light View-Projection Matrix
     const lightPos = new Vec3([this.lightPosition.x, this.lightPosition.y, this.lightPosition.z]);
     const target = new Vec3([0, 0, 0]);
     const up = new Vec3([0, 1, 0]);
     const lightView = Mat4.lookAt(lightPos, target, up);
-    const lightProj = Mat4.orthographic(-200, 200, -200, 200, 10, 500);
+    const lightProj = Mat4.orthographic(-1280, 1280, -960, 960, 0.1, 3000);
     this.lightViewProjMatrix = lightProj.multiply(lightView);
-
-    // === Shadow Pass ===
+    console.log("🔎 Updated LightViewProj Matrix:", new Float32Array(this.lightViewProjMatrix.all()));
+    // First Pass
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
     gl.viewport(0, 0, this.shadowMapSize, this.shadowMapSize);
-    gl.clear(gl.DEPTH_BUFFER_BIT);
+    console.log("🎥 Starting Shadow Pass: binding shadow framebuffer and setting viewport.");
+
+    // 💥 Clear color + depth, because depth stored manually in color now
+    gl.clearColor(1.0, 1.0, 1.0, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS); // be explicit
 
     for (const chunk of this.chunks.values()) {
       this.shadowRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
       this.shadowRenderPass.drawInstanced(chunk.numCubes());
     }
 
-    // Back to normal framebuffer
+    // Reset back to screen
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.canvas2d.width, this.canvas2d.height); // ← reset viewport to screen size
+    console.log("✅ Shadow Pass done. Is shadowTexture bound?", this.shadowTexture != null);
+
+
+    gl.viewport(0, 0, this.canvas2d.width, this.canvas2d.height);
 
     // 3. Jumping & Falling
     if (!this.isGrounded) {
@@ -324,10 +351,10 @@ export class MinecraftAnimation extends CanvasAnimation {
         this.playerPosition.y = intendedY;
         this.isGrounded = false;
       } else {
-        console.log("%c🟥 COLLISION DETECTED — LANDING", "color: red; font-weight: bold;");
+        // console.log("%c🟥 COLLISION DETECTED — LANDING", "color: red; font-weight: bold;");
         if (this.velocityY < 0) {
           this.isGrounded = true;
-          console.log("%c🛬 Landed on solid ground. isGrounded = true", "color: green; font-size: 16px; font-weight: bold;");
+          // console.log("%c🛬 Landed on solid ground. isGrounded = true", "color: green; font-size: 16px; font-weight: bold;");
         }
         this.velocityY = 0;
       }
@@ -367,15 +394,15 @@ export class MinecraftAnimation extends CanvasAnimation {
               this.playerPosition.y = terrainHeight + 2.0;
               this.isGrounded = true;
               this.velocityY = 0;
-              console.log("✅ Step-up snap to ground.");
+              // console.log("✅ Step-up snap to ground.");
             } else if (delta < -0.05) {
               this.isGrounded = false;
-              console.log("⬇️ Fell down due to height gap.");
+              // console.log("⬇️ Fell down due to height gap.");
             }
           }
         }
       } else {
-        console.log("⛔ Collision while walking");
+        // console.log("⛔ Collision while walking");
       }
     }
 
@@ -387,14 +414,34 @@ export class MinecraftAnimation extends CanvasAnimation {
     const bg = this.backgroundColor;
     gl.clearColor(bg.r, bg.g, bg.b, bg.a);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
     gl.enable(gl.CULL_FACE);
     gl.enable(gl.DEPTH_TEST);
     gl.frontFace(gl.CCW);
     gl.cullFace(gl.BACK);
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // this.drawShadowMapDebug();
+
     this.drawScene(0, 0, 1280, 960);
   }
+  private drawShadowMapDebug(): void {
+    const gl = this.ctx;
+    gl.viewport(0, 0, 1000, 600);
 
+    gl.clearColor(0.0, 0.0, 0.0, 1.0); // Black background (for debug)
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    gl.disable(gl.CULL_FACE); // Disable culling for full-screen quad
+    gl.disable(gl.DEPTH_TEST); // No depth test needed
+
+    // Make sure shadowTexture is bound to TEXTURE0
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
+
+    // 🔥 ACTUALLY draw the quad!
+    this.debugQuadRenderPass.draw();
+  }
 
   private isCollision(pos: Vec3): boolean {
     const x = pos.x;
@@ -428,14 +475,14 @@ export class MinecraftAnimation extends CanvasAnimation {
 
       const chunk = this.getChunkAt(chunkX, chunkZ);
       if (!chunk) {
-        console.log(`❌ No chunk at (${chunkX}, ${chunkZ}) for point (${px.toFixed(2)}, ${pz.toFixed(2)})`);
+        // console.log(`❌ No chunk at (${chunkX}, ${chunkZ}) for point (${px.toFixed(2)}, ${pz.toFixed(2)})`);
         continue;
       }
 
 
       const solid = chunk.isSolid(px, maxY, pz);
       if (solid) {
-        console.log(`🚫 Collision at (${px.toFixed(2)}, ${maxY}, ${pz.toFixed(2)})`);
+        // console.log(`🚫 Collision at (${px.toFixed(2)}, ${maxY}, ${pz.toFixed(2)})`);
         return true;
       }
     }
@@ -450,14 +497,12 @@ export class MinecraftAnimation extends CanvasAnimation {
     const key = `${cx},${cz}`;
     const chunk = this.chunks.get(key);
     if (!chunk) {
-      console.log(`❌ No chunk for world (${x}, ${z}) → chunk key (${key})`);
+      // console.log(`❌ No chunk for world (${x}, ${z}) → chunk key (${key})`);
     } else {
-      console.log(`✅ Found chunk at (${cx}, ${cz}) for block (${x}, ${z})`);
+      // console.log(`✅ Found chunk at (${cx}, ${cz}) for block (${x}, ${z})`);
     }
     return chunk;
   }
-
-
 
   /**
    * Sets up the blank cube drawing
@@ -540,7 +585,7 @@ export class MinecraftAnimation extends CanvasAnimation {
         gl.uniform1f(loc, this.timeOfDay);
       });
 
-    // shadow mapping
+    //shadow mapping
     this.blankCubeRenderPass.addUniform("uShadowMap", (gl, loc) => {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
@@ -551,17 +596,54 @@ export class MinecraftAnimation extends CanvasAnimation {
       gl.uniformMatrix4fv(loc, false, new Float32Array(this.lightViewProjMatrix.all()));
     });
 
-
     this.blankCubeRenderPass.setDrawData(this.ctx.TRIANGLES, this.cubeGeometry.indicesFlat().length, this.ctx.UNSIGNED_INT, 0);
     this.blankCubeRenderPass.setup();
+
+    //debug
+
   }
+  private initDebugQuad(): void {
+    const gl = this.ctx;
 
+    this.debugQuadRenderPass = new RenderPass(gl, debugQuadVSText, debugQuadFSText);
 
+    const quadVertices = new Float32Array([
+      -1, -1,
+      1, -1,
+      -1, 1,
+      1, 1,
+    ]);
+    const quadIndices = new Uint32Array([
+      0, 1, 2,
+      2, 1, 3
+    ]);
 
+    this.debugQuadRenderPass.setIndexBufferData(quadIndices);
+
+    this.debugQuadRenderPass.addAttribute(
+      "aPosition", 2, gl.FLOAT, false,
+      2 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
+      quadVertices
+    );
+
+    this.debugQuadRenderPass.addUniform("uTexture", (gl, loc) => {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
+      gl.uniform1i(loc, 0);
+    });
+
+    this.debugQuadRenderPass.setDrawData(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+    this.debugQuadRenderPass.setup();
+  }
 
   private drawScene(x: number, y: number, width: number, height: number): void {
     const gl: WebGLRenderingContext = this.ctx;
     gl.viewport(x, y, width, height);
+
+    console.log(`🖌️ Starting Scene Render: viewport (${x}, ${y}) size (${width}x${height})`);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
+    console.log("🗺️ Bound shadow map texture for second pass.");
 
     // Render all chunks in the 3x3 grid around player
     for (const chunk of this.chunks.values()) {
