@@ -42,8 +42,8 @@ export class MinecraftAnimation extends CanvasAnimation {
   private time: number;
 
   // day and night
-  private timeOfDay: number = 0.25; // Start at sunrise
-  private cycleSpeed: number = 0.01; // Control how fast time changes per frame
+  // private timeOfDay: number = 0.25; // Start at sunrise
+  // private cycleSpeed: number = 0.01; // Control how fast time changes per frame
 
   //An
   // === Constants ===
@@ -60,7 +60,7 @@ export class MinecraftAnimation extends CanvasAnimation {
   // === Shadow Mapping ===
   private shadowFramebuffer: WebGLFramebuffer;
   private shadowTexture: WebGLTexture;
-  private shadowMapSize: number = 1024;
+  private shadowMapSize: number = 8192;
   private lightViewProjMatrix: Mat4;
   private shadowRenderPass: RenderPass;
 
@@ -135,6 +135,7 @@ export class MinecraftAnimation extends CanvasAnimation {
 
     // === Setup the shadow render pass ===
     this.shadowRenderPass = new RenderPass(gl, shadowVSText, shadowFSText);
+
     this.shadowRenderPass.setIndexBufferData(this.cubeGeometry.indicesFlat());
     this.shadowRenderPass.addAttribute(
       "aVertPos", 4, gl.FLOAT, false,
@@ -144,6 +145,11 @@ export class MinecraftAnimation extends CanvasAnimation {
     this.shadowRenderPass.addInstancedAttribute(
       "aOffset", 4, gl.FLOAT, false,
       4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
+      new Float32Array(0)
+    );
+    this.shadowRenderPass.addInstancedAttribute(
+      "aBlockType", 1, gl.FLOAT, false,
+      1 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
       new Float32Array(0)
     );
     this.shadowRenderPass.addUniform("uLightViewProj", (gl, loc) => {
@@ -164,45 +170,45 @@ export class MinecraftAnimation extends CanvasAnimation {
     }
   }
 
-  private updateDayNightCycle(): void {
-    // Increment time based on speed
-    this.timeOfDay += this.cycleSpeed;
+  // private updateDayNightCycle(): void {
+  //   // Increment time based on speed
+  //   this.timeOfDay += this.cycleSpeed;
 
-    // Wrap around after 1.0 (24-hour cycle)
-    if (this.timeOfDay > 1.0) {
-      this.timeOfDay -= 1.0;
-    }
+  //   // Wrap around after 1.0 (24-hour cycle)
+  //   if (this.timeOfDay > 1.0) {
+  //     this.timeOfDay -= 1.0;
+  //   }
 
-    // Compute sun position
-    const angle = this.timeOfDay * 2.0 * Math.PI;
-    const sunX = Math.cos(angle) * 1000.0;
-    const sunY = Math.sin(angle) * 1000.0;
-    const sunZ = 100.0;
+  //   // Compute sun position
+  //   const angle = this.timeOfDay * 2.0 * Math.PI;
+  //   const sunX = Math.cos(angle) * 1000.0;
+  //   const sunY = Math.sin(angle) * 1000.0;
+  //   const sunZ = 100.0;
 
-    // Simulate sunlight brightness
-    const brightness = Math.max(0.2, sunY / 1000.0); // Clamp night brightness
-    const ambientColor = new Vec4([brightness * 0.4, brightness * 0.4, brightness * 0.5, 1.0]);
+  //   // Simulate sunlight brightness
+  //   const brightness = Math.max(0.2, sunY / 1000.0); // Clamp night brightness
+  //   const ambientColor = new Vec4([brightness * 0.4, brightness * 0.4, brightness * 0.5, 1.0]);
 
-    // Update global light position (for shaders)
-    this.lightPosition = new Vec4([sunX, sunY, sunZ, 1.0]);
+  //   // Update global light position (for shaders)
+  //   this.lightPosition = new Vec4([sunX, sunY, sunZ, 1.0]);
 
-    // Smoothly blend between night and day sky colors
-    const nightSky = new Vec4([0.05, 0.02, 0.1, 1.0]); // deep purple
-    const daySky = new Vec4([0.5, 0.8, 1.0, 1.0]);     // sky blue
-    const blend = Math.max(0, Math.sin(this.timeOfDay * Math.PI));
+  //   // Smoothly blend between night and day sky colors
+  //   const nightSky = new Vec4([0.05, 0.02, 0.1, 1.0]); // deep purple
+  //   const daySky = new Vec4([0.5, 0.8, 1.0, 1.0]);     // sky blue
+  //   const blend = Math.max(0, Math.sin(this.timeOfDay * Math.PI));
 
-    this.backgroundColor = new Vec4([
-      daySky.x * blend + nightSky.x * (1 - blend),
-      daySky.y * blend + nightSky.y * (1 - blend),
-      daySky.z * blend + nightSky.z * (1 - blend),
-      1.0
-    ]);
-  }
+  //   this.backgroundColor = new Vec4([
+  //     daySky.x * blend + nightSky.x * (1 - blend),
+  //     daySky.y * blend + nightSky.y * (1 - blend),
+  //     daySky.z * blend + nightSky.z * (1 - blend),
+  //     1.0
+  //   ]);
+  // }
 
-  public adjustCycleSpeed(delta: number): void {
-    this.cycleSpeed = Math.max(0.0, this.cycleSpeed + delta);
-    // console.log(`Cycle speed now: ${this.cycleSpeed.toFixed(4)}`);
-  }
+  // public adjustCycleSpeed(delta: number): void {
+  //   this.cycleSpeed = Math.max(0.0, this.cycleSpeed + delta);
+  //   // console.log(`Cycle speed now: ${this.cycleSpeed.toFixed(4)}`);
+  // }
 
   /**
    * Setup the simulation. This can be called again to reset the program.
@@ -295,14 +301,25 @@ export class MinecraftAnimation extends CanvasAnimation {
     const gl = this.ctx;
 
     // // 1. Day-night cycle
-    this.updateDayNightCycle();
+    // this.updateDayNightCycle();
 
     // 2. Update Light View-Projection Matrix
     const lightPos = new Vec3([this.lightPosition.x, this.lightPosition.y, this.lightPosition.z]);
     const target = new Vec3([0, 0, 0]);
     const up = new Vec3([0, 1, 0]);
-    const lightView = Mat4.lookAt(lightPos, target, up);
-    const lightProj = Mat4.orthographic(-1280, 1280, -960, 960, 0.1, 3000);
+    // const lightView = Mat4.lookAt(lightPos, target, up);
+    const camPos = camera.pos();
+    const lightView = Mat4.lookAt(
+      new Vec3([lightPos.x, lightPos.y, lightPos.z]), // tweak offset
+      camPos,
+      new Vec3([0, 1, 0])
+    );
+
+    // const lightProj = Mat4.orthographic(-1280, 1280, -960, 960, 0.1, 3000);
+    const orthoSize = 100; // or even smaller
+    const lightProj = Mat4.orthographic(-orthoSize, orthoSize, -orthoSize, orthoSize, 1.0, 3000.0);
+
+    // const lightProj = Mat4.orthographic(-128, 128, -128, 128, 0.1, 500);
     this.lightViewProjMatrix = lightProj.multiply(lightView);
     console.log("🔎 Updated LightViewProj Matrix:", new Float32Array(this.lightViewProjMatrix.all()));
     // First Pass
@@ -319,6 +336,7 @@ export class MinecraftAnimation extends CanvasAnimation {
 
     for (const chunk of this.chunks.values()) {
       this.shadowRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+      this.shadowRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes()); // ✅ add this!
       this.shadowRenderPass.drawInstanced(chunk.numCubes());
     }
 
@@ -580,10 +598,10 @@ export class MinecraftAnimation extends CanvasAnimation {
         gl.uniformMatrix4fv(loc, false, new Float32Array(this.gui.viewMatrix().all()));
       });
     // add day and night cycle
-    this.blankCubeRenderPass.addUniform("uTimeOfDay",
-      (gl: WebGLRenderingContext, loc: WebGLUniformLocation) => {
-        gl.uniform1f(loc, this.timeOfDay);
-      });
+    // this.blankCubeRenderPass.addUniform("uTimeOfDay",
+    //   (gl: WebGLRenderingContext, loc: WebGLUniformLocation) => {
+    //     gl.uniform1f(loc, this.timeOfDay);
+    //   });
 
     //shadow mapping
     this.blankCubeRenderPass.addUniform("uShadowMap", (gl, loc) => {

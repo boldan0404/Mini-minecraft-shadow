@@ -131,12 +131,12 @@ export class GUI {
                 case "Space":
                     this.animation.jump();
                     break;
-                case "BracketLeft":
-                    this.animation.adjustCycleSpeed(-0.005); // slow down
-                    break;
-                case "BracketRight":
-                    this.animation.adjustCycleSpeed(0.005); // speed up
-                    break;
+                // case "BracketLeft":
+                //   this.animation.adjustCycleSpeed(-0.005); // slow down
+                //   break;
+                // case "BracketRight":
+                //   this.animation.adjustCycleSpeed(0.005); // speed up
+                //   break;
             }
         }
     }
