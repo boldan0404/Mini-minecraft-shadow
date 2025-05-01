@@ -1,3 +1,36 @@
+export const shadowVolumeVSText = `
+    precision mediump float;
+    
+    uniform mat4 uView;
+    uniform mat4 uProj;
+    uniform vec4 uLightPos;
+    
+    attribute vec4 aVertPos;
+    attribute vec4 aNorm;
+    attribute vec4 aOffset;
+    
+    varying vec4 vWorldPos;
+    varying vec4 vNormal;
+    
+    void main() {
+        // Simply transform the vertex without extrusion for now
+        vec4 worldPos = aVertPos + aOffset;
+        vWorldPos = worldPos;
+        vNormal = aNorm;
+        gl_Position = uProj * uView * worldPos;
+    }
+`;
+export const shadowVolumeFSText = `
+    precision mediump float;
+    
+    varying vec4 vWorldPos;
+    varying vec4 vNormal;
+    
+    void main() {
+        // Use a bright red color to easily see if it renders
+        gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+    }
+`;
 export const perlinCubeVSText = `
     precision mediump float;
     
@@ -33,7 +66,8 @@ export const perlinCubeFSText = `
     uniform float uTime;
     uniform sampler2D uShadowMap;
     uniform mat4 uLightViewProj;
-   // uniform float uTimeOfDay; // Range [0.0, 1.0] where 0 is midnight, 0.5 is noon
+    uniform bool uUseShadowVolumes; // New uniform to toggle shadow techniques
+    uniform float uAmbientIntensity; // Control ambient light intensity
 
     varying vec4 normal;
     varying vec4 wsPos;
@@ -94,11 +128,7 @@ export const perlinCubeFSText = `
         return finalMix * 0.7071 + 0.5;
     }
 
-    // Step 4: Add shader support for new block types (wood and leaves)
-  // This should be added to the perlinCubeFSText variable in Shaders.js
-  
-  
-   // Wood texture procedural function
+    // Wood texture procedural function
     vec3 woodTexture(vec2 uv, vec3 position) {
       // Wood colors
       vec3 lightWood = vec3(0.6, 0.4, 0.2);
@@ -263,143 +293,32 @@ export const perlinCubeFSText = `
         return color;
     }
     
-    // Main shader function
-    // void main() {
-    //     // Choose texture based on block type and apply diffuse lighting
-    //     vec3 kd;
-        
-    //     // Generate a block-specific seed from position for texture variation
-    //     float blockSeed = wsPos.x * 1000.0 + wsPos.z * 0.1 + wsPos.y * 10.0;
-        
-    //     // Calculate a surface normal-based face ID for consistent texturing
-    //     vec3 absNormal = abs(normal.xyz);
-    //     float faceIdx = 0.0;
-        
-    //     // Determine which face we're on (top, sides, bottom)
-    //     if (absNormal.y > 0.9) {
-    //         faceIdx = normal.y > 0.0 ? 0.0 : 1.0; // Top or bottom
-    //     } else if (absNormal.x > 0.9) {
-    //         faceIdx = 2.0; // X-facing sides
-    //     } else {
-    //         faceIdx = 3.0; // Z-facing sides
-    //     }
-        
-    //     // Use adjusted UVs based on face
-    //     vec2 adjustedUV = uv;
-    //     if (faceIdx >= 2.0) {
-    //         // Rotate UVs for side faces to prevent obvious tiling patterns
-    //         adjustedUV = faceIdx == 2.0 ? 
-    //                      vec2(uv.y, uv.x) : 
-    //                      vec2(uv.x, 1.0 - uv.y);
-    //     }
-        
-    //     // Apply different procedural textures based on block type
-    //     if (vBlockType < 0.5) {
-    //         // Type 0: Grass
-    //         kd = grassTexture(adjustedUV, wsPos.xyz);
-    //     } else if (vBlockType < 1.5) {
-    //         // Type 1: Stone
-    //         kd = stoneTexture(adjustedUV, wsPos.xyz);
-    //     } else if (vBlockType < 2.5) {
-    //         // Type 2: Water
-    //         kd = waterTexture(adjustedUV, wsPos.xyz);
-    //     } else if (vBlockType < 3.5) {
-    //         // Type 3: Snow
-    //         kd = snowTexture(adjustedUV, wsPos.xyz);
-    //     } else if (vBlockType < 4.5) {
-    //         // Type 4: Wood
-    //         kd = woodTexture(adjustedUV, wsPos.xyz);
-    //     } else {
-    //         // Type 5: Leaves
-    //         kd = leafTexture(adjustedUV, wsPos.xyz);
-    //     }
-    //     // vec4 lightDirection = uLightPos - wsPos;
-        
-    //     // // --- New SHADOW MAPPING code begins here ---
+    // Calculate shadow using shadow mapping technique
+    float calculateShadowMap() {
+        // Project world position into light space
+        vec4 lightSpacePos = uLightViewProj * wsPos;
+        lightSpacePos /= lightSpacePos.w;
 
-    //     // // Project world position into light space
-    //     // vec4 lightSpacePos = uLightViewProj * wsPos;
-    //     // lightSpacePos /= lightSpacePos.w;
-    //     // vec2 shadowTexCoord = lightSpacePos.xy * 0.5 + 0.5;
-    //     // float fragmentDepthInLight = lightSpacePos.z * 0.5 + 0.5;
+        vec2 shadowTexCoord = lightSpacePos.xy * 0.5 + 0.5;
+        float fragmentDepthInLight = lightSpacePos.z * 0.5 + 0.5;
 
-    //     // // Sample depth from shadow map
-    //     // float depthFromMap = texture2D(uShadowMap, shadowTexCoord).r;
+        // Apply PCF (Percentage Closer Filtering)
+        float bias = max(0.002 * (1.0 - dot(normalize(normal.xyz), normalize(uLightPos.xyz - wsPos.xyz))), 0.001);
+        float shadow = 0.0;
+        float texelSize = 1.0 / 8192.0;
 
-    //     // // Bias and Percentage Closer Filtering (PCF) for smoothing
-    //     // float bias = 0.005;
-
-    //     // float shadow = 0.0;
-    //     // float texelSize = 1.0 / 2048.0;
-
-    //     // for (int x = -2; x <= 2; ++x) {
-    //     // for (int y = -2; y <= 2; ++y) {
-    //     //     float pcfDepth = texture2D(uShadowMap, shadowTexCoord + vec2(x, y) * texelSize).r;
-    //     //     shadow += (fragmentDepthInLight - bias) > pcfDepth ? 1.0 : 0.0;
-    //     // }
-    //     // }
-    //     // shadow /= 25.0;
-
-    //     // // Clamp shadow value (optional safety)
-    //     // shadow = clamp(shadow, 0.0, 1.0);
-    //     // float ambientStrength = 0.2 + 0.8 * max(0.0, sin(uTimeOfDay * 3.14159));
- 
-    //     // // Lighting calculation
-    //     // vec3 ka = kd * ambientStrength;   
-    //     // /* Compute light fall off */
-    //     // float dot_nl = dot(normalize(lightDirection), normalize(normal));
-    //     // dot_nl = clamp(dot_nl, 0.0, 1.0);
-        
-    //     // // light for shadow
-    //     // vec3 directLight = (1.0 - shadow) * dot_nl * kd;
-        
-    //     // vec3  finalColor = ka + directLight;
-    //     // gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
-    //         //Compute light direction
-    // vec3 lightDir = normalize(uLightPos.xyz);
-    // vec3 normalDir = normalize(normal.xyz);
-
-    // // --- SHADOW MAPPING ---
-
-    // // Project world position into light space
-    // vec4 lightSpacePos = uLightViewProj * wsPos;
-    // lightSpacePos /= lightSpacePos.w;
-
-    // vec2 shadowTexCoord = lightSpacePos.xy * 0.5 + 0.5;
-    // float fragmentDepthInLight = lightSpacePos.z * 0.5 + 0.5;
-
-    // // PCF (Percentage Closer Filtering)
-    // float bias = max(0.002 * (1.0 - dot(normalDir, lightDir)), 0.001);
-
-    // float shadow = 0.0;
-    // float texelSize = 1.0 / 8192.0;
-
-    // for (int x = -5; x <= 5; ++x) {
-    //   for (int y = -5; y <= 5; ++y) {
-    //      vec2 offset = vec2(x, y) * texelSize;
-    // float pcfDepth = texture2D(uShadowMap, shadowTexCoord + offset).r;
-    // float currentDepth = fragmentDepthInLight - bias;
-    // shadow += smoothstep(pcfDepth - 0.003, pcfDepth + 0.003, currentDepth);
-    //   }
-    // }
-    // shadow /= 121.0;
-    // shadow = clamp(shadow, 0.0, 1.0);
-
-    // // --- TIME-BASED LIGHTING ---
-    // float directStrength = max(0.0, sin(uTimeOfDay * 3.14159));
-    // float ambientStrength = mix(0.25, 0.45, directStrength);
-
-    // // --- LIGHTING CALCULATIONS ---
-    // vec3 kdMod = kd * mix(0.5, 1.2, directStrength); // Darken diffuse at night
-    // vec3 ka = kdMod * ambientStrength * (0.5 + 0.5 * (1.0 - shadow)); // Shadow reduces ambient
-
-    // float dot_nl = max(dot(lightDir, normalDir), 0.05); // Avoid overly dark vertical faces
-    // vec3 directLight = (1.0 - shadow) * dot_nl * kdMod;
-
-    // vec3 finalColor = ka + directLight;
-    // gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
-
-    // }
+        for (int x = -5; x <= 5; ++x) {
+            for (int y = -5; y <= 5; ++y) {
+                vec2 offset = vec2(x, y) * texelSize;
+                float pcfDepth = texture2D(uShadowMap, shadowTexCoord + offset).r;
+                float currentDepth = fragmentDepthInLight - bias;
+                shadow += smoothstep(pcfDepth - 0.003, pcfDepth + 0.003, currentDepth);
+            }
+        }
+        shadow /= 121.0;
+        return clamp(shadow, 0.0, 1.0);
+    }
+    
     void main() {
     vec3 kd;
 
@@ -434,40 +353,35 @@ export const perlinCubeFSText = `
         kd = leafTexture(adjustedUV, wsPos.xyz);
     }
 
-    vec3 lightDir = normalize(uLightPos.xyz);
+    vec3 lightDir = normalize(uLightPos.xyz - wsPos.xyz);
     vec3 normalDir = normalize(normal.xyz);
 
-    vec4 lightSpacePos = uLightViewProj * wsPos;
-    lightSpacePos /= lightSpacePos.w;
-
-    vec2 shadowTexCoord = lightSpacePos.xy * 0.5 + 0.5;
-    float fragmentDepthInLight = lightSpacePos.z * 0.5 + 0.5;
-
-    float bias = max(0.002 * (1.0 - dot(normalDir, lightDir)), 0.001);
+    // Calculate shadow factor based on technique
     float shadow = 0.0;
-    float texelSize = 1.0 / 8192.0;
-
-    for (int x = -5; x <= 5; ++x) {
-        for (int y = -5; y <= 5; ++y) {
-            vec2 offset = vec2(x, y) * texelSize;
-            float pcfDepth = texture2D(uShadowMap, shadowTexCoord + offset).r;
-            float currentDepth = fragmentDepthInLight - bias;
-            shadow += smoothstep(pcfDepth - 0.003, pcfDepth + 0.003, currentDepth);
-        }
+    if (!uUseShadowVolumes) {
+        // Shadow Mapping technique
+        shadow = calculateShadowMap();
+    } else {
+        // For debugging shadow volumes, just use normal lighting without stencil-based shadows
+        shadow = 0.0; // No shadow for now while debugging
     }
-    shadow /= 121.0;
-    shadow = clamp(shadow, 0.0, 1.0);
 
-    float ambientStrength = 0.3; // constant ambient light
-    vec3 ka = kd * ambientStrength * (0.5 + 0.5 * (1.0 - shadow)); // reduce ambient in shadow
+    // Calculate lighting
+    float ambientStrength = uAmbientIntensity;
+    vec3 ka = kd * ambientStrength;
 
     float dot_nl = max(dot(lightDir, normalDir), 0.05);
     vec3 directLight = (1.0 - shadow) * dot_nl * kd;
 
     vec3 finalColor = ka + directLight;
+    
+    // DEBUG: If using shadow volumes, slightly tint the scene blue to confirm the technique is active
+    if (uUseShadowVolumes) {
+        finalColor = mix(finalColor, vec3(0.0, 0.0, 1.0), 0.1);
+    }
+    
     gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
-}
-`;
+}`;
 export const shadowVSText = `
     precision mediump float;
 

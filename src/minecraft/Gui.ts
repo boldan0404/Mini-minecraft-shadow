@@ -163,12 +163,18 @@ export class GUI implements IGUI {
    */
   public onKeydown(key: KeyboardEvent): void {
     // Always capture important keys
+
+    if (key.code === "KeyT") {
+      this.animation.toggleShadowTechnique();
+  }
+  
     if (key.code === "KeyW" || key.code === "KeyA" ||
       key.code === "KeyS" || key.code === "KeyD" ||
       key.code === "Space" || key.code === "KeyR" ||
       key.code === "BracketLeft" || key.code === "BracketRight") {
       key.preventDefault();
 
+      
       switch (key.code) {
         case "KeyW": this.Wdown = true; break;
         case "KeyA": this.Adown = true; break;

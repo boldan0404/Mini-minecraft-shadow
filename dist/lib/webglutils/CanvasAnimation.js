@@ -51,7 +51,8 @@ export class WebGLUtilities {
     static requestWebGLContext(canvas) {
         /* Request WebGL Context */
         let ctx = canvas.getContext("webgl2", {
-            preserveDrawingBuffer: true
+            preserveDrawingBuffer: true,
+            stencil: true
         });
         if (!ctx) {
             console.log("Your browser does not support WebGL, falling back", "to Experimental WebGL");

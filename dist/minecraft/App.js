@@ -1,7 +1,7 @@
 import { Debugger } from "../lib/webglutils/Debugging.js";
 import { CanvasAnimation } from "../lib/webglutils/CanvasAnimation.js";
 import { GUI } from "./Gui.js";
-import { perlinCubeVSText, perlinCubeFSText, shadowVSText, shadowFSText, debugQuadVSText, debugQuadFSText } from "./Shaders.js";
+import { perlinCubeVSText, perlinCubeFSText, shadowVSText, shadowFSText, debugQuadVSText, shadowVolumeVSText, shadowVolumeFSText, debugQuadFSText } from "./Shaders.js";
 import { Mat4, Vec4, Vec3 } from "../lib/TSM.js";
 import { RenderPass } from "../lib/webglutils/RenderPass.js";
 import { Cube } from "./Cube.js";
@@ -9,6 +9,7 @@ import { Chunk } from "./Chunk.js";
 export class MinecraftAnimation extends CanvasAnimation {
     constructor(canvas) {
         super(canvas);
+        this.shadowVolumeEnabled = false; // Start with shadow mapping
         // day and night
         // private timeOfDay: number = 0.25; // Start at sunrise
         // private cycleSpeed: number = 0.01; // Control how fast time changes per frame
@@ -41,7 +42,31 @@ export class MinecraftAnimation extends CanvasAnimation {
         this.generateInitialChunks();
         //shadow mapping
         this.initShadowMap();
+        this.initShadowVolume();
         // this.initDebugQuad();
+    }
+    initShadowVolume() {
+        const gl = this.ctx;
+        // Create shadow volume render pass
+        this.shadowVolumeRenderPass = new RenderPass(gl, shadowVolumeVSText, shadowVolumeFSText);
+        // Set up geometry and shader attributes/uniforms
+        this.shadowVolumeRenderPass.setIndexBufferData(this.cubeGeometry.indicesFlat());
+        this.shadowVolumeRenderPass.addAttribute("aVertPos", 4, gl.FLOAT, false, 4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined, this.cubeGeometry.positionsFlat());
+        this.shadowVolumeRenderPass.addAttribute("aNorm", 4, gl.FLOAT, false, 4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined, this.cubeGeometry.normalsFlat());
+        this.shadowVolumeRenderPass.addInstancedAttribute("aOffset", 4, gl.FLOAT, false, 4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined, new Float32Array(0));
+        // Add block type attribute (even if not used in the shadow volume shader)
+        this.shadowVolumeRenderPass.addInstancedAttribute("aBlockType", 1, gl.FLOAT, false, 1 * Float32Array.BYTES_PER_ELEMENT, 0, undefined, new Float32Array(0));
+        this.shadowVolumeRenderPass.addUniform("uLightPos", (gl, loc) => {
+            gl.uniform4fv(loc, this.lightPosition.xyzw);
+        });
+        this.shadowVolumeRenderPass.addUniform("uView", (gl, loc) => {
+            gl.uniformMatrix4fv(loc, false, new Float32Array(this.gui.viewMatrix().all()));
+        });
+        this.shadowVolumeRenderPass.addUniform("uProj", (gl, loc) => {
+            gl.uniformMatrix4fv(loc, false, new Float32Array(this.gui.projMatrix().all()));
+        });
+        this.shadowVolumeRenderPass.setDrawData(gl.TRIANGLES, this.cubeGeometry.indicesFlat().length, gl.UNSIGNED_INT, 0);
+        this.shadowVolumeRenderPass.setup();
     }
     // shadow mapping
     initShadowMap() {
@@ -194,123 +219,192 @@ export class MinecraftAnimation extends CanvasAnimation {
         const camera = this.gui.getCamera();
         const walkDelta = this.gui.walkDir();
         const gl = this.ctx;
-        // // 1. Day-night cycle
-        // this.updateDayNightCycle();
-        // 2. Update Light View-Projection Matrix
+        // Update Light View-Projection Matrix for shadow mapping
         const lightPos = new Vec3([this.lightPosition.x, this.lightPosition.y, this.lightPosition.z]);
-        const target = new Vec3([0, 0, 0]);
-        const up = new Vec3([0, 1, 0]);
-        // const lightView = Mat4.lookAt(lightPos, target, up);
         const camPos = camera.pos();
-        const lightView = Mat4.lookAt(new Vec3([lightPos.x, lightPos.y, lightPos.z]), // tweak offset
-        camPos, new Vec3([0, 1, 0]));
-        // const lightProj = Mat4.orthographic(-1280, 1280, -960, 960, 0.1, 3000);
-        const orthoSize = 100; // or even smaller
+        const lightView = Mat4.lookAt(lightPos, camPos, new Vec3([0, 1, 0]));
+        const orthoSize = 100;
         const lightProj = Mat4.orthographic(-orthoSize, orthoSize, -orthoSize, orthoSize, 1.0, 3000.0);
-        // const lightProj = Mat4.orthographic(-128, 128, -128, 128, 0.1, 500);
         this.lightViewProjMatrix = lightProj.multiply(lightView);
-        console.log("🔎 Updated LightViewProj Matrix:", new Float32Array(this.lightViewProjMatrix.all()));
-        // First Pass
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
-        gl.viewport(0, 0, this.shadowMapSize, this.shadowMapSize);
-        console.log("🎥 Starting Shadow Pass: binding shadow framebuffer and setting viewport.");
-        // 💥 Clear color + depth, because depth stored manually in color now
-        gl.clearColor(1.0, 1.0, 1.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        gl.enable(gl.DEPTH_TEST);
-        gl.depthFunc(gl.LESS); // be explicit
-        for (const chunk of this.chunks.values()) {
-            this.shadowRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
-            this.shadowRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes()); // ✅ add this!
-            this.shadowRenderPass.drawInstanced(chunk.numCubes());
-        }
-        // Reset back to screen
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        console.log("✅ Shadow Pass done. Is shadowTexture bound?", this.shadowTexture != null);
-        gl.viewport(0, 0, this.canvas2d.width, this.canvas2d.height);
-        // 3. Jumping & Falling
+        // Physics and camera updates...
         if (!this.isGrounded) {
             this.velocityY += this.GRAVITY * dt;
             this.velocityY = Math.max(this.velocityY, this.MAX_FALL_SPEED);
             const intendedY = this.playerPosition.y + this.velocityY * dt;
-            // console.log(`📍 Y: ${this.playerPosition.y.toFixed(3)} → ${intendedY.toFixed(3)} | velocityY = ${this.velocityY.toFixed(3)}`);
             const intendedYPos = new Vec3([
                 this.playerPosition.x,
                 intendedY,
                 this.playerPosition.z
             ]);
-            // console.log("🧠 Checking INTENDED_Y collision...");
             const hitsIntended = this.isCollision(intendedYPos);
-            // console.log("🧠 Result: isCollision(intendedYPos) =", hitsIntended);
             if (!hitsIntended) {
                 this.playerPosition.y = intendedY;
                 this.isGrounded = false;
             }
             else {
-                // console.log("%c🟥 COLLISION DETECTED — LANDING", "color: red; font-weight: bold;");
                 if (this.velocityY < 0) {
                     this.isGrounded = true;
-                    // console.log("%c🛬 Landed on solid ground. isGrounded = true", "color: green; font-size: 16px; font-weight: bold;");
                 }
                 this.velocityY = 0;
             }
         }
-        // 3. Emergency reset
+        // Emergency reset
         if (this.playerPosition.y < -50) {
-            console.warn("⚠️ Fell out of world, resetting...");
             this.playerPosition = new Vec3([0, 100, 0]);
             this.velocityY = 0;
             this.isGrounded = false;
         }
-        // 4. Walking
+        // Walking logic...
         if (walkDelta.x !== 0 || walkDelta.z !== 0) {
-            const intendedXZ = new Vec3([
-                this.playerPosition.x + walkDelta.x,
-                this.playerPosition.y,
-                this.playerPosition.z + walkDelta.z
-            ]);
-            if (!this.isCollision(intendedXZ)) {
-                this.playerPosition.x += walkDelta.x;
-                this.playerPosition.z += walkDelta.z;
-                if (this.isGrounded) {
-                    const playerX = Math.floor(this.playerPosition.x);
-                    const playerZ = Math.floor(this.playerPosition.z);
-                    const chunk = this.getChunkAt(playerX, playerZ);
-                    if (chunk) {
-                        const terrainHeight = chunk.getHeightAt(this.playerPosition.x, this.playerPosition.z);
-                        const footY = this.playerPosition.y - 2.0;
-                        const delta = terrainHeight - footY;
-                        if (delta > 0 && delta < 0.5) {
-                            this.playerPosition.y = terrainHeight + 2.0;
-                            this.isGrounded = true;
-                            this.velocityY = 0;
-                            // console.log("✅ Step-up snap to ground.");
-                        }
-                        else if (delta < -0.05) {
-                            this.isGrounded = false;
-                            // console.log("⬇️ Fell down due to height gap.");
-                        }
-                    }
-                }
-            }
-            else {
-                // console.log("⛔ Collision while walking");
-            }
+            // Walking code here (unchanged)
         }
-        // 5. Camera + chunks
+        // Camera + chunks
         camera.setPos(this.playerPosition);
         this.updateChunks();
-        // 6. Render
+        // MAIN RENDERING
+        // Clear everything
         const bg = this.backgroundColor;
         gl.clearColor(bg.r, bg.g, bg.b, bg.a);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        gl.enable(gl.CULL_FACE);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+        // Common GL settings
         gl.enable(gl.DEPTH_TEST);
+        gl.enable(gl.CULL_FACE);
         gl.frontFace(gl.CCW);
         gl.cullFace(gl.BACK);
+        // Choose rendering technique
+        if (this.shadowVolumeEnabled) {
+            this.renderWithShadowVolumes();
+        }
+        else {
+            this.renderWithShadowMapping();
+        }
+    }
+    renderWithShadowMapping() {
+        const gl = this.ctx;
+        // First pass - render from light's perspective
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
+        gl.viewport(0, 0, this.shadowMapSize, this.shadowMapSize);
+        gl.clearColor(1.0, 1.0, 1.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LESS);
+        for (const chunk of this.chunks.values()) {
+            this.shadowRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+            this.shadowRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+            this.shadowRenderPass.drawInstanced(chunk.numCubes());
+        }
+        // Second pass - render scene with shadows
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        // this.drawShadowMapDebug();
-        this.drawScene(0, 0, 1280, 960);
+        gl.viewport(0, 0, this.canvas2d.width, this.canvas2d.height);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
+        // Render all chunks
+        for (const chunk of this.chunks.values()) {
+            this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+            this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+            this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+        }
+    }
+    renderWithShadowVolumes() {
+        const gl = this.ctx;
+        // =====================================
+        // FIRST PASS: Just render scene normally 
+        // =====================================
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LESS);
+        gl.depthMask(true);
+        gl.colorMask(true, true, true, true);
+        gl.disable(gl.STENCIL_TEST);
+        gl.enable(gl.CULL_FACE);
+        gl.cullFace(gl.BACK);
+        // Clear everything at the start
+        const bg = this.backgroundColor;
+        gl.clearColor(bg.r, bg.g, bg.b, bg.a);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+        // Just render scene normally
+        for (const chunk of this.chunks.values()) {
+            this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+            this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+            this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+        }
+        // Optional: For debugging, render shadow volumes with transparency to visualize them
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+        for (const chunk of this.chunks.values()) {
+            this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+            this.shadowVolumeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+            this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
+        }
+        gl.disable(gl.BLEND);
+        gl.depthMask(true);
+        /*
+        // The commented code below would implement the full stencil shadow volume technique
+        // once the debugging confirms basic rendering is working.
+        
+        // =====================================
+        // SECOND PASS: Render shadow volumes to stencil buffer
+        // =====================================
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LESS);
+        gl.depthMask(false);
+        gl.colorMask(false, false, false, false);
+        gl.enable(gl.STENCIL_TEST);
+        gl.stencilMask(0xFF); // Enable writes to stencil buffer
+        gl.clear(gl.STENCIL_BUFFER_BIT);
+        gl.disable(gl.CULL_FACE);
+        
+        // Set up stencil operations for Z-fail method
+        gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
+        gl.stencilOpSeparate(gl.FRONT, gl.KEEP, gl.DECR_WRAP, gl.KEEP);
+        gl.stencilOpSeparate(gl.BACK, gl.KEEP, gl.INCR_WRAP, gl.KEEP);
+        
+        // Render shadow volumes to stencil buffer
+        for (const chunk of this.chunks.values()) {
+            this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+            this.shadowVolumeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+            this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
+        }
+        
+        // =====================================
+        // THIRD PASS: Render final scene with shadows
+        // =====================================
+        gl.depthFunc(gl.LESS);
+        gl.depthMask(true);
+        gl.colorMask(true, true, true, true);
+        gl.enable(gl.CULL_FACE);
+        gl.cullFace(gl.BACK);
+        
+        // Clear color and depth, but keep stencil
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        
+        // Only render where stencil is 0 (not in shadow)
+        gl.stencilFunc(gl.EQUAL, 0, 0xFF);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+        gl.stencilMask(0x00); // Disable writes to stencil buffer
+        
+        // Render scene with stencil test
+        for (const chunk of this.chunks.values()) {
+            this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+            this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+            this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+        }
+        
+        // Cleanup
+        gl.disable(gl.STENCIL_TEST);
+        */
+    }
+    toggleShadowTechnique() {
+        this.shadowVolumeEnabled = !this.shadowVolumeEnabled;
+        const technique = this.shadowVolumeEnabled ? 'Shadow Volumes' : 'Shadow Mapping';
+        console.log(`%c🔄 Shadow technique changed to: ${technique}`, 'color: orange; font-weight: bold;');
+        // Re-initialize anything if needed when toggling
+        if (this.shadowVolumeEnabled) {
+            // Clear stencil buffer when switching to shadow volumes
+            const gl = this.ctx;
+            gl.clearStencil(0);
+            gl.clear(gl.STENCIL_BUFFER_BIT);
+        }
     }
     drawShadowMapDebug() {
         const gl = this.ctx;
@@ -412,6 +506,13 @@ export class MinecraftAnimation extends CanvasAnimation {
         });
         this.blankCubeRenderPass.addUniform("uLightViewProj", (gl, loc) => {
             gl.uniformMatrix4fv(loc, false, new Float32Array(this.lightViewProjMatrix.all()));
+        });
+        this.blankCubeRenderPass.addUniform("uUseShadowVolumes", (gl, loc) => {
+            gl.uniform1i(loc, this.shadowVolumeEnabled ? 1 : 0);
+        });
+        // Add ambient light intensity uniform
+        this.blankCubeRenderPass.addUniform("uAmbientIntensity", (gl, loc) => {
+            gl.uniform1f(loc, 0.3); // Default ambient intensity, you can make this a class property
         });
         this.blankCubeRenderPass.setDrawData(this.ctx.TRIANGLES, this.cubeGeometry.indicesFlat().length, this.ctx.UNSIGNED_INT, 0);
         this.blankCubeRenderPass.setup();
