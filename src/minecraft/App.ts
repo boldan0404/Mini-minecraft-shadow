@@ -132,12 +132,15 @@ export class MinecraftAnimation extends CanvasAnimation {
         new Float32Array(0)
     );
     
-    // Add block type attribute (even if not used in the shadow volume shader)
+    // Add block type attribute 
     this.shadowVolumeRenderPass.addInstancedAttribute(
         "aBlockType", 1, gl.FLOAT, false,
         1 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
         new Float32Array(0)
     );
+    
+    // IMPORTANT: Remove the duplicate attribute that was causing conflicts
+    // Remove this attribute: "aBlockType" as a non-instanced attribute
     
     this.shadowVolumeRenderPass.addUniform("uLightPos", (gl, loc) => {
         gl.uniform4fv(loc, this.lightPosition.xyzw);
@@ -469,12 +472,12 @@ private renderWithShadowVolumes(): void {
   const gl = this.ctx;
   
   // =====================================
-  // FIRST PASS: Just render scene normally 
+  // FIRST PASS: Just render scene normally with depth only
   // =====================================
   gl.enable(gl.DEPTH_TEST);
   gl.depthFunc(gl.LESS);
   gl.depthMask(true);
-  gl.colorMask(true, true, true, true);
+  gl.colorMask(true, true, true, true); 
   gl.disable(gl.STENCIL_TEST);
   gl.enable(gl.CULL_FACE);
   gl.cullFace(gl.BACK);
@@ -484,49 +487,44 @@ private renderWithShadowVolumes(): void {
   gl.clearColor(bg.r, bg.g, bg.b, bg.a);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
   
-  // Just render scene normally
+  // Render the scene to the depth buffer and color buffer
   for (const chunk of this.chunks.values()) {
       this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
       this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
       this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
   }
   
-  // Optional: For debugging, render shadow volumes with transparency to visualize them
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-  gl.depthMask(false);
-  
-  for (const chunk of this.chunks.values()) {
-      this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
-      this.shadowVolumeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
-      this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
-  }
-  
-  gl.disable(gl.BLEND);
-  gl.depthMask(true);
-
-  /* 
-  // The commented code below would implement the full stencil shadow volume technique
-  // once the debugging confirms basic rendering is working.
-  
   // =====================================
   // SECOND PASS: Render shadow volumes to stencil buffer
   // =====================================
-  gl.enable(gl.DEPTH_TEST);
-  gl.depthFunc(gl.LESS);
-  gl.depthMask(false);
-  gl.colorMask(false, false, false, false);
+  gl.colorMask(false, false, false, false); // Don't write to color buffer
+  gl.depthMask(false); // Don't write to depth buffer
   gl.enable(gl.STENCIL_TEST);
   gl.stencilMask(0xFF); // Enable writes to stencil buffer
-  gl.clear(gl.STENCIL_BUFFER_BIT);
-  gl.disable(gl.CULL_FACE);
+  gl.clear(gl.STENCIL_BUFFER_BIT); // Clear stencil buffer
   
-  // Set up stencil operations for Z-fail method
+  // IMPORTANT: We need to use depth testing, but don't update the depth buffer
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LESS); // Use LESS for classic Z-fail approach
+  
+  // First pass: render ONLY back faces
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.FRONT);
   gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
-  gl.stencilOpSeparate(gl.FRONT, gl.KEEP, gl.DECR_WRAP, gl.KEEP);
-  gl.stencilOpSeparate(gl.BACK, gl.KEEP, gl.INCR_WRAP, gl.KEEP);
+  gl.stencilOp(gl.KEEP, gl.INCR_WRAP, gl.KEEP); // INCR when depth test fails
   
-  // Render shadow volumes to stencil buffer
+  // Render shadow volumes to stencil buffer - back faces
+  for (const chunk of this.chunks.values()) {
+      this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+      this.shadowVolumeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+      this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
+  }
+  
+  // Second pass: render ONLY front faces
+  gl.cullFace(gl.BACK);
+  gl.stencilOp(gl.KEEP, gl.DECR_WRAP, gl.KEEP); // DECR when depth test fails
+  
+  // Render shadow volumes to stencil buffer - front faces
   for (const chunk of this.chunks.values()) {
       this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
       this.shadowVolumeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
@@ -534,32 +532,45 @@ private renderWithShadowVolumes(): void {
   }
   
   // =====================================
-  // THIRD PASS: Render final scene with shadows
+  // THIRD PASS: Render scene with shadows
   // =====================================
-  gl.depthFunc(gl.LESS);
-  gl.depthMask(true);
-  gl.colorMask(true, true, true, true);
-  gl.enable(gl.CULL_FACE);
-  gl.cullFace(gl.BACK);
-  
-  // Clear color and depth, but keep stencil
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  // Restore state for rendering
+  gl.depthFunc(gl.LEQUAL);
+  gl.depthMask(true); // Enable depth writes
+  gl.colorMask(true, true, true, true); // Enable color writes
+  gl.cullFace(gl.BACK); // Back to normal culling
   
   // Only render where stencil is 0 (not in shadow)
   gl.stencilFunc(gl.EQUAL, 0, 0xFF);
   gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
   gl.stencilMask(0x00); // Disable writes to stencil buffer
   
-  // Render scene with stencil test
+  // REMOVE THIS LINE - DON'T CLEAR AGAIN - This is what causes the blue screen
+  // gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  
+  // Render scene with stencil test (only lit areas)
   for (const chunk of this.chunks.values()) {
       this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
       this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
       this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
   }
   
+  // OPTIONAL: Draw shadowed areas with ambient light only
+  // For a higher quality result, uncomment this
+  /*
+  gl.stencilFunc(gl.NOTEQUAL, 0, 0xFF); // Render where stencil is NOT 0 (in shadow)
+  // Set ambient-only lighting uniform here if you have one
+  
+  // Render scene with stencil test (only shadowed areas)
+  for (const chunk of this.chunks.values()) {
+      this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+      this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+      this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+  }
+  */
+  
   // Cleanup
   gl.disable(gl.STENCIL_TEST);
-  */
 }
 
 public toggleShadowTechnique(): void {

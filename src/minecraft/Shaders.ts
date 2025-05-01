@@ -8,15 +8,26 @@ export const shadowVolumeVSText = `
     attribute vec4 aVertPos;
     attribute vec4 aNorm;
     attribute vec4 aOffset;
-    
-    varying vec4 vWorldPos;
-    varying vec4 vNormal;
+    attribute float aBlockType;
     
     void main() {
-        // Simply transform the vertex without extrusion for now
+        // Calculate world position
         vec4 worldPos = aVertPos + aOffset;
-        vWorldPos = worldPos;
-        vNormal = aNorm;
+        
+        // Calculate light direction in world space
+        vec3 lightDir = normalize(uLightPos.xyz - worldPos.xyz);
+        
+        // Determine if face is facing away from light (shadow caster)
+        vec3 normal = normalize(aNorm.xyz);
+        
+        // Only extrude vertices if the face is backfacing from the light
+        // This is critical for correct shadow volumes
+        if (dot(normal, lightDir) < 0.0) {
+            // Extrude along ray from light to vertex
+            vec3 extrusionDir = worldPos.xyz - uLightPos.xyz;
+            worldPos.xyz += normalize(extrusionDir) * 2000.0; // Use larger value for better coverage
+        }
+        
         gl_Position = uProj * uView * worldPos;
     }
 `;
@@ -24,12 +35,12 @@ export const shadowVolumeVSText = `
 export const shadowVolumeFSText = `
     precision mediump float;
     
-    varying vec4 vWorldPos;
-    varying vec4 vNormal;
-    
     void main() {
-        // Use a bright red color to easily see if it renders
-        gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+        // For debug: uncomment to see shadow volumes
+        // gl_FragColor = vec4(1.0, 0.0, 0.0, 0.5);
+        
+        // For actual rendering, just use black
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
     }
 `;
 
@@ -360,28 +371,24 @@ export const perlinCubeFSText = `
     vec3 normalDir = normalize(normal.xyz);
 
     // Calculate shadow factor based on technique
-    float shadow = 0.0;
+     float shadow = 0.0;
     if (!uUseShadowVolumes) {
         // Shadow Mapping technique
         shadow = calculateShadowMap();
     } else {
-        // For debugging shadow volumes, just use normal lighting without stencil-based shadows
-        shadow = 0.0; // No shadow for now while debugging
+        // For shadow volumes, the stencil test handles shadowing
+        // No need to calculate anything here
+        shadow = 0.0;
     }
-
+    
     // Calculate lighting
     float ambientStrength = uAmbientIntensity;
     vec3 ka = kd * ambientStrength;
-
+    
     float dot_nl = max(dot(lightDir, normalDir), 0.05);
     vec3 directLight = (1.0 - shadow) * dot_nl * kd;
-
-    vec3 finalColor = ka + directLight;
     
-    // DEBUG: If using shadow volumes, slightly tint the scene blue to confirm the technique is active
-    if (uUseShadowVolumes) {
-        finalColor = mix(finalColor, vec3(0.0, 0.0, 1.0), 0.1);
-    }
+    vec3 finalColor = ka + directLight;
     
     gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
 }`
