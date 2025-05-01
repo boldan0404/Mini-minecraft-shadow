@@ -172,6 +172,7 @@ export class RenderPass {
     this.drawType = drawType;
     this.drawOffset = drawOffset;
   }
+  
 
   public addUniform(name: string,
                     bindFunction: (gl: WebGLRenderingContext, loc: WebGLUniformLocation) => void) {

@@ -1,46 +1,55 @@
 export const shadowVolumeVSText = `
     precision mediump float;
+
+uniform mat4 uView;
+uniform mat4 uProj;
+uniform vec4 uLightPos;
+
+attribute vec4 aVertPos;
+attribute vec4 aNorm;
+attribute vec4 aOffset;
+attribute float aBlockType;
+
+varying vec4 vColor; // For debugging
+
+void main() {
+    // Calculate world position
+    vec4 worldPos = aVertPos + aOffset;
     
-    uniform mat4 uView;
-    uniform mat4 uProj;
-    uniform vec4 uLightPos;
+    // Get normal in world space (assuming it's already normalized)
+    vec3 normal = aNorm.xyz;
     
-    attribute vec4 aVertPos;
-    attribute vec4 aNorm;
-    attribute vec4 aOffset;
-    attribute float aBlockType;
+    // Calculate light direction (from vertex to light)
+    vec3 lightDir = normalize(uLightPos.xyz - worldPos.xyz);
     
-    void main() {
-        // Calculate world position
-        vec4 worldPos = aVertPos + aOffset;
-        
-        // Calculate light direction in world space
-        vec3 lightDir = normalize(uLightPos.xyz - worldPos.xyz);
-        
-        // Determine if face is facing away from light (shadow caster)
-        vec3 normal = normalize(aNorm.xyz);
-        
-        // Only extrude vertices if the face is backfacing from the light
-        // This is critical for correct shadow volumes
-        if (dot(normal, lightDir) < 0.0) {
-            // Extrude along ray from light to vertex
-            vec3 extrusionDir = worldPos.xyz - uLightPos.xyz;
-            worldPos.xyz += normalize(extrusionDir) * 2000.0; // Use larger value for better coverage
-        }
-        
-        gl_Position = uProj * uView * worldPos;
+    // Dot product determines if face is facing away from light
+    float facingLight = dot(normal, lightDir);
+    
+    // Extrude vertices along the ray from light to vertex
+    // Use a large extrusion value to ensure it goes beyond far plane
+    vec3 extrusionDir = worldPos.xyz - uLightPos.xyz;
+    float extrusionLength = 10000.0; // Very large extrusion
+    
+    // Always extrude, but we'll handle culling differently in the draw calls
+    if (facingLight < 0.0) {
+        worldPos.xyz += normalize(extrusionDir) * extrusionLength;
+        vColor = vec4(1.0, 0.0, 0.0, 0.3); // Red for debugging
+    } else {
+        vColor = vec4(0.0, 1.0, 0.0, 0.3); // Green for debugging
     }
+    
+    gl_Position = uProj * uView * worldPos;
+}
 `;
 export const shadowVolumeFSText = `
     precision mediump float;
-    
-    void main() {
-        // For debug: uncomment to see shadow volumes
-        // gl_FragColor = vec4(1.0, 0.0, 0.0, 0.5);
-        
-        // For actual rendering, just use black
-        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-    }
+
+varying vec4 vColor; // For debugging
+
+void main() {
+    // For visual debugging of shadow volumes
+    gl_FragColor = vColor;
+}
 `;
 export const perlinCubeVSText = `
     precision mediump float;
@@ -79,6 +88,8 @@ export const perlinCubeFSText = `
     uniform mat4 uLightViewProj;
     uniform bool uUseShadowVolumes; // New uniform to toggle shadow techniques
     uniform float uAmbientIntensity; // Control ambient light intensity
+    uniform int uAmbientOnly;           // Add this new uniform
+
 
     varying vec4 normal;
     varying vec4 wsPos;
@@ -332,11 +343,11 @@ export const perlinCubeFSText = `
     
     void main() {
     vec3 kd;
-
+    
     float blockSeed = wsPos.x * 1000.0 + wsPos.z * 0.1 + wsPos.y * 10.0;
     vec3 absNormal = abs(normal.xyz);
     float faceIdx = 0.0;
-
+    
     if (absNormal.y > 0.9) {
         faceIdx = normal.y > 0.0 ? 0.0 : 1.0;
     } else if (absNormal.x > 0.9) {
@@ -344,12 +355,12 @@ export const perlinCubeFSText = `
     } else {
         faceIdx = 3.0;
     }
-
+    
     vec2 adjustedUV = uv;
     if (faceIdx >= 2.0) {
         adjustedUV = faceIdx == 2.0 ? vec2(uv.y, uv.x) : vec2(uv.x, 1.0 - uv.y);
     }
-
+    
     if (vBlockType < 0.5) {
         kd = grassTexture(adjustedUV, wsPos.xyz);
     } else if (vBlockType < 1.5) {
@@ -363,28 +374,32 @@ export const perlinCubeFSText = `
     } else {
         kd = leafTexture(adjustedUV, wsPos.xyz);
     }
-
+    
     vec3 lightDir = normalize(uLightPos.xyz - wsPos.xyz);
     vec3 normalDir = normalize(normal.xyz);
-
-    // Calculate shadow factor based on technique
-     float shadow = 0.0;
-    if (!uUseShadowVolumes) {
-        // Shadow Mapping technique
-        shadow = calculateShadowMap();
-    } else {
-        // For shadow volumes, the stencil test handles shadowing
-        // No need to calculate anything here
-        shadow = 0.0;
-    }
     
     // Calculate lighting
     float ambientStrength = uAmbientIntensity;
     vec3 ka = kd * ambientStrength;
     
+    // Check if we should render ambient-only
+    if (uAmbientOnly == 1) {
+        // Ambient only for shadowed areas
+        gl_FragColor = vec4(ka, 1.0);
+        return;
+    }
+    
+    // Calculate shadow factor based on technique
+    float shadow = 0.0;
+    if (!uUseShadowVolumes) {
+        // Shadow Mapping technique
+        shadow = calculateShadowMap();
+    }
+    
     float dot_nl = max(dot(lightDir, normalDir), 0.05);
     vec3 directLight = (1.0 - shadow) * dot_nl * kd;
     
+    // Final color is ambient + direct lighting
     vec3 finalColor = ka + directLight;
     
     gl_FragColor = vec4(clamp(finalColor, 0.0, 1.0), 1.0);
