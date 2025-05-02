@@ -27,6 +27,16 @@ export class GUI {
         // Make sure canvas can get focus
         canvas.tabIndex = 1;
     }
+    drawDebugInfo(ctx) {
+        ctx.fillStyle = 'white';
+        ctx.font = '12px monospace';
+        // Display chunk stats
+        const stats = this.animation.getDebugStats();
+        ctx.fillText(stats, 10, 20);
+        // Display camera position
+        const pos = this.camera.pos();
+        ctx.fillText(`Pos: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`, 10, 40);
+    }
     /**
      * Resets the state of the GUI
      */
@@ -218,7 +228,7 @@ export class GUI {
     }
 }
 GUI.rotationSpeed = 0.01;
-GUI.walkSpeed = 1;
+GUI.walkSpeed = 10;
 GUI.rollSpeed = 0.1;
 GUI.panSpeed = 0.1;
 //# sourceMappingURL=Gui.js.map

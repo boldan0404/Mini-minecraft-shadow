@@ -34,6 +34,7 @@ export class MinecraftAnimation extends CanvasAnimation {
         else {
             console.warn("Could not retrieve context attributes, stencil buffer status unknown");
         }
+        this.visibleChunks = new Set();
         this.time = 0;
         this.chunks = new Map();
         this.chunkSize = 64;
@@ -196,30 +197,57 @@ export class MinecraftAnimation extends CanvasAnimation {
         const playerChunkX = Math.floor(this.playerPosition.x / this.chunkSize) * this.chunkSize;
         const playerChunkZ = Math.floor(this.playerPosition.z / this.chunkSize) * this.chunkSize;
         const newCurrentChunk = `${playerChunkX},${playerChunkZ}`;
-        // If player moved to a new chunk
-        if (newCurrentChunk !== this.currentChunk) {
-            this.currentChunk = newCurrentChunk;
-            // Get chunks to keep and chunks to add
-            const chunksToKeep = new Set();
-            // Generate 3x3 grid of chunks around player
-            for (let x = -1; x <= 1; x++) {
-                for (let z = -1; z <= 1; z++) {
-                    const chunkX = playerChunkX + x * this.chunkSize;
-                    const chunkZ = playerChunkZ + z * this.chunkSize;
-                    const key = `${chunkX},${chunkZ}`;
+        // Always update current chunk value
+        this.currentChunk = newCurrentChunk;
+        // Get the camera's frustum
+        const camera = this.gui.getCamera();
+        camera.updateFrustum();
+        const frustum = camera.getFrustum();
+        // Clear visible chunks set
+        this.visibleChunks.clear();
+        // Check rendering distance (adjust as needed for performance)
+        const renderDistance = 5;
+        // Generate 3x3 grid of chunks as before for physics
+        // But use a larger area for checking visibility
+        const chunksToKeep = new Set();
+        for (let x = -renderDistance; x <= renderDistance; x++) {
+            for (let z = -renderDistance; z <= renderDistance; z++) {
+                const chunkX = playerChunkX + x * this.chunkSize;
+                const chunkZ = playerChunkZ + z * this.chunkSize;
+                const key = `${chunkX},${chunkZ}`;
+                // Always keep nearby chunks for physics
+                if (Math.abs(x) <= 1 && Math.abs(z) <= 1) {
                     chunksToKeep.add(key);
-                    // Create new chunk if needed
+                }
+                // Calculate chunk bounding box
+                const halfSize = this.chunkSize / 2;
+                const centerX = chunkX;
+                const centerZ = chunkZ;
+                // Get min/max heights in chunk (approximate)
+                let minY = 0;
+                let maxY = 80; // Adjust based on your terrain generation
+                // If chunk exists, use its actual height range
+                const existingChunk = this.chunks.get(key);
+                if (existingChunk) {
+                    // Determine actual height range if possible
+                    // For now, we'll use a conservative estimate
+                }
+                // Check if chunk bounding box is in frustum
+                if (frustum.boxInFrustum(centerX - halfSize, minY, centerZ - halfSize, centerX + halfSize, maxY, centerZ + halfSize)) {
+                    // Chunk is visible, mark it
+                    this.visibleChunks.add(key);
+                    // Create chunk if needed
                     if (!this.chunks.has(key)) {
                         const chunk = new Chunk(chunkX, chunkZ, this.chunkSize);
                         this.chunks.set(key, chunk);
                     }
                 }
             }
-            // Remove chunks that are too far away
-            for (const key of this.chunks.keys()) {
-                if (!chunksToKeep.has(key)) {
-                    this.chunks.delete(key);
-                }
+        }
+        // Remove chunks that are too far away
+        for (const key of this.chunks.keys()) {
+            if (!chunksToKeep.has(key) && !this.visibleChunks.has(key)) {
+                this.chunks.delete(key);
             }
         }
     }
@@ -265,7 +293,36 @@ export class MinecraftAnimation extends CanvasAnimation {
         }
         // Walking logic...
         if (walkDelta.x !== 0 || walkDelta.z !== 0) {
-            // Walking code here (unchanged)
+            // Get movement speed
+            const moveSpeed = GUI.walkSpeed * dt;
+            // Calculate intended movement
+            const intendedX = this.playerPosition.x + walkDelta.x * moveSpeed;
+            const intendedZ = this.playerPosition.z + walkDelta.z * moveSpeed;
+            // Check for collisions using smaller steps
+            const steps = Math.ceil(moveSpeed / this.COLLISION_STEP);
+            const stepX = walkDelta.x * moveSpeed / steps;
+            const stepZ = walkDelta.z * moveSpeed / steps;
+            // Try moving in steps
+            for (let i = 0; i < steps; i++) {
+                // Try X movement
+                const newPosX = new Vec3([
+                    this.playerPosition.x + stepX,
+                    this.playerPosition.y,
+                    this.playerPosition.z
+                ]);
+                if (!this.isCollision(newPosX)) {
+                    this.playerPosition.x += stepX;
+                }
+                // Try Z movement
+                const newPosZ = new Vec3([
+                    this.playerPosition.x,
+                    this.playerPosition.y,
+                    this.playerPosition.z + stepZ
+                ]);
+                if (!this.isCollision(newPosZ)) {
+                    this.playerPosition.z += stepZ;
+                }
+            }
         }
         // Camera + chunks
         camera.setPos(this.playerPosition);
@@ -287,6 +344,11 @@ export class MinecraftAnimation extends CanvasAnimation {
         else {
             this.renderWithShadowMapping();
         }
+        const ctx2d = this.canvas2d.getContext('2d');
+        if (ctx2d) {
+            ctx2d.clearRect(0, 0, this.canvas2d.width, this.canvas2d.height);
+            this.gui.drawDebugInfo(ctx2d);
+        }
     }
     renderWithShadowMapping() {
         const gl = this.ctx;
@@ -297,6 +359,8 @@ export class MinecraftAnimation extends CanvasAnimation {
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
         gl.enable(gl.DEPTH_TEST);
         gl.depthFunc(gl.LESS);
+        // When generating shadow map, render all chunks regardless of visibility
+        // This ensures shadows are correctly cast even from off-screen chunks
         for (const chunk of this.chunks.values()) {
             this.shadowRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
             this.shadowRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
@@ -307,16 +371,18 @@ export class MinecraftAnimation extends CanvasAnimation {
         gl.viewport(0, 0, this.canvas2d.width, this.canvas2d.height);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
-        // Render all chunks
-        for (const chunk of this.chunks.values()) {
-            this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
-            this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
-            this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+        // Render only visible chunks
+        for (const [key, chunk] of this.chunks.entries()) {
+            if (this.visibleChunks.has(key)) {
+                this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+                this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+                this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+            }
         }
     }
     renderWithShadowVolumes() {
         const gl = this.ctx;
-        // === FIRST PASS: Normal scene rendering with ambient only ===
+        // First pass - ambient light
         gl.colorMask(true, true, true, true);
         gl.depthMask(true);
         gl.disable(gl.STENCIL_TEST);
@@ -326,57 +392,58 @@ export class MinecraftAnimation extends CanvasAnimation {
         const bg = this.backgroundColor;
         gl.clearColor(bg.r, bg.g, bg.b, bg.a);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
-        // Force ambient only for the first pass
         this.ambientOnlyMode = true;
-        // Render scene with ambient light only (fills depth buffer)
-        for (const chunk of this.chunks.values()) {
-            this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
-            this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
-            this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+        // Render only visible chunks for the first pass
+        for (const [key, chunk] of this.chunks.entries()) {
+            if (this.visibleChunks.has(key)) {
+                this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+                this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+                this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+            }
         }
-        // === SECOND PASS: Set up stencil buffer with shadow volumes ===
-        gl.colorMask(false, false, false, false); // Don't write to color buffer
-        gl.depthMask(false); // Don't write to depth buffer
+        // Second pass - shadow volumes
+        gl.colorMask(false, false, false, false);
+        gl.depthMask(false);
         gl.enable(gl.DEPTH_TEST);
-        gl.depthFunc(gl.LESS); // Standard depth test
-        // Set up stencil operations
+        gl.depthFunc(gl.LESS);
         gl.enable(gl.STENCIL_TEST);
-        gl.stencilMask(0xFF); // Allow writing to stencil buffer
-        gl.stencilFunc(gl.ALWAYS, 0, 0xFF); // Always pass stencil test
-        gl.clear(gl.STENCIL_BUFFER_BIT); // Start with clean stencil
-        // First: render back faces, incrementing stencil where depth test fails
-        gl.cullFace(gl.FRONT); // Cull front faces, render back faces
-        gl.stencilOpSeparate(gl.BACK, gl.KEEP, gl.INCR_WRAP, gl.KEEP); // Increment on depth fail
-        // Render shadow volumes for all chunks - back faces first
+        gl.stencilMask(0xFF);
+        gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
+        gl.clear(gl.STENCIL_BUFFER_BIT);
+        // For shadows, we need to consider ALL chunks that could cast shadows
+        // This is a limitation of standard shadow volumes
+        gl.cullFace(gl.FRONT);
+        gl.stencilOpSeparate(gl.BACK, gl.KEEP, gl.INCR_WRAP, gl.KEEP);
         for (const chunk of this.chunks.values()) {
             this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
             this.shadowVolumeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
             this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
         }
-        // Second: render front faces, decrementing stencil where depth test fails
-        gl.cullFace(gl.BACK); // Cull back faces, render front faces
-        gl.stencilOpSeparate(gl.FRONT, gl.KEEP, gl.DECR_WRAP, gl.KEEP); // Decrement on depth fail
-        // Render shadow volumes for all chunks - front faces
+        gl.cullFace(gl.BACK);
+        gl.stencilOpSeparate(gl.FRONT, gl.KEEP, gl.DECR_WRAP, gl.KEEP);
         for (const chunk of this.chunks.values()) {
             this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
             this.shadowVolumeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
             this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
         }
-        // === THIRD PASS: Render lit areas ===
-        gl.cullFace(gl.BACK); // Back to normal culling
-        gl.colorMask(true, true, true, true); // Enable color writing
-        gl.stencilFunc(gl.EQUAL, 0, 0xFF); // Only draw where stencil = 0 (lit areas)
-        gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP); // Don't modify stencil buffer
-        gl.depthFunc(gl.LEQUAL); // Less or equal for the lighting pass
-        // Render lit areas with full lighting
-        this.ambientOnlyMode = false; // Full lighting
-        for (const chunk of this.chunks.values()) {
-            this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
-            this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
-            this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+        // Third pass - lit areas (only for visible chunks)
+        gl.cullFace(gl.BACK);
+        gl.colorMask(true, true, true, true);
+        gl.stencilFunc(gl.EQUAL, 0, 0xFF);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+        gl.depthFunc(gl.LEQUAL);
+        this.ambientOnlyMode = false;
+        for (const [key, chunk] of this.chunks.entries()) {
+            if (this.visibleChunks.has(key)) {
+                this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+                this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+                this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+            }
         }
-        // Clean up state
         gl.disable(gl.STENCIL_TEST);
+    }
+    getDebugStats() {
+        return `Loaded chunks: ${this.chunks.size}, Visible: ${this.visibleChunks.size}`;
     }
     toggleShadowTechnique() {
         this.shadowVolumeEnabled = !this.shadowVolumeEnabled;

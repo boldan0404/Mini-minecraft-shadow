@@ -23,7 +23,7 @@ interface IGUI {
 
 export class GUI implements IGUI {
   private static readonly rotationSpeed: number = 0.01;
-  private static readonly walkSpeed: number = 1;
+  static readonly walkSpeed: number = 10;
   private static readonly rollSpeed: number = 0.1;
   private static readonly panSpeed: number = 0.1;
 
@@ -65,6 +65,20 @@ export class GUI implements IGUI {
     // Make sure canvas can get focus
     canvas.tabIndex = 1;
   }
+
+
+  public drawDebugInfo(ctx: CanvasRenderingContext2D): void {
+    ctx.fillStyle = 'white';
+    ctx.font = '12px monospace';
+    
+    // Display chunk stats
+    const stats = this.animation.getDebugStats();
+    ctx.fillText(stats, 10, 20);
+    
+    // Display camera position
+    const pos = this.camera.pos();
+    ctx.fillText(`Pos: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`, 10, 40);
+}
 
   /**
    * Resets the state of the GUI

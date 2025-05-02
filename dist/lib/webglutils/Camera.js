@@ -1,5 +1,6 @@
 import { Mat4, Mat3, Vec3 } from "../TSM.js";
 import { Quat } from "../tsm/Quat.js";
+import { Frustum } from "../../minecraft/Frustum.js";
 //import { Ray } from "../../ray/Ray"
 export class RayCamera {
     constructor(position, look) {
@@ -47,6 +48,8 @@ export class Camera {
         console.assert(this._up != null);
         this._dist = Vec3.difference(pos, target).length();
         console.assert(this._dist != null);
+        this.frustum = new Frustum();
+        this.updateFrustum();
         this._initial_forward = this._forward.copy();
         this._initial_up = this._up.copy();
         this._orientation = new Quat().setIdentity();
@@ -59,6 +62,16 @@ export class Camera {
         console.assert(this._zNear != null);
         this._zFar = zFar;
         console.assert(this._zFar != null);
+    }
+    updateFrustum() {
+        // Calculate view-projection matrix
+        const viewProj = this.projMatrix().copy().multiply(this.viewMatrix());
+        // Extract frustum planes
+        this.frustum.extractFromMatrix(viewProj);
+    }
+    // Add this getter
+    getFrustum() {
+        return this.frustum;
     }
     setKeyFrame(p, o, d) {
         this._eye = p.copy();
