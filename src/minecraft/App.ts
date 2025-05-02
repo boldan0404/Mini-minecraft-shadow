@@ -856,59 +856,7 @@ public toggleShadowTechnique(): void {
     //debug
 
   }
-  private initDebugQuad(): void {
-    const gl = this.ctx;
 
-    this.debugQuadRenderPass = new RenderPass(gl, debugQuadVSText, debugQuadFSText);
-
-    const quadVertices = new Float32Array([
-      -1, -1,
-      1, -1,
-      -1, 1,
-      1, 1,
-    ]);
-    const quadIndices = new Uint32Array([
-      0, 1, 2,
-      2, 1, 3
-    ]);
-
-    this.debugQuadRenderPass.setIndexBufferData(quadIndices);
-
-    this.debugQuadRenderPass.addAttribute(
-      "aPosition", 2, gl.FLOAT, false,
-      2 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
-      quadVertices
-    );
-
-    this.debugQuadRenderPass.addUniform("uTexture", (gl, loc) => {
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
-      gl.uniform1i(loc, 0);
-    });
-
-    this.debugQuadRenderPass.setDrawData(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
-    this.debugQuadRenderPass.setup();
-  }
-
-  private drawScene(x: number, y: number, width: number, height: number): void {
-    const gl: WebGLRenderingContext = this.ctx;
-    gl.viewport(x, y, width, height);
-
-    console.log(`🖌️ Starting Scene Render: viewport (${x}, ${y}) size (${width}x${height})`);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
-    console.log("🗺️ Bound shadow map texture for second pass.");
-
-    // Render all chunks in the 3x3 grid around player
-    for (const chunk of this.chunks.values()) {
-      // Update instance buffers for this chunk
-      this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
-      this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
-
-      // Draw all cubes in this chunk
-      this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
-    }
-  }
 
   public getGUI(): GUI {
     return this.gui;

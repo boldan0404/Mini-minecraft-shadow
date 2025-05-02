@@ -1,7 +1,7 @@
 import { Debugger } from "../lib/webglutils/Debugging.js";
 import { CanvasAnimation } from "../lib/webglutils/CanvasAnimation.js";
 import { GUI } from "./Gui.js";
-import { perlinCubeVSText, perlinCubeFSText, shadowVSText, shadowFSText, debugQuadVSText, shadowVolumeVSText, shadowVolumeFSText, debugQuadFSText } from "./Shaders.js";
+import { perlinCubeVSText, perlinCubeFSText, shadowVSText, shadowFSText, shadowVolumeVSText, shadowVolumeFSText } from "./Shaders.js";
 import { Mat4, Vec4, Vec3 } from "../lib/TSM.js";
 import { RenderPass } from "../lib/webglutils/RenderPass.js";
 import { Cube } from "./Cube.js";
@@ -581,45 +581,6 @@ export class MinecraftAnimation extends CanvasAnimation {
         this.blankCubeRenderPass.setDrawData(this.ctx.TRIANGLES, this.cubeGeometry.indicesFlat().length, this.ctx.UNSIGNED_INT, 0);
         this.blankCubeRenderPass.setup();
         //debug
-    }
-    initDebugQuad() {
-        const gl = this.ctx;
-        this.debugQuadRenderPass = new RenderPass(gl, debugQuadVSText, debugQuadFSText);
-        const quadVertices = new Float32Array([
-            -1, -1,
-            1, -1,
-            -1, 1,
-            1, 1,
-        ]);
-        const quadIndices = new Uint32Array([
-            0, 1, 2,
-            2, 1, 3
-        ]);
-        this.debugQuadRenderPass.setIndexBufferData(quadIndices);
-        this.debugQuadRenderPass.addAttribute("aPosition", 2, gl.FLOAT, false, 2 * Float32Array.BYTES_PER_ELEMENT, 0, undefined, quadVertices);
-        this.debugQuadRenderPass.addUniform("uTexture", (gl, loc) => {
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
-            gl.uniform1i(loc, 0);
-        });
-        this.debugQuadRenderPass.setDrawData(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
-        this.debugQuadRenderPass.setup();
-    }
-    drawScene(x, y, width, height) {
-        const gl = this.ctx;
-        gl.viewport(x, y, width, height);
-        console.log(`🖌️ Starting Scene Render: viewport (${x}, ${y}) size (${width}x${height})`);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, this.shadowTexture);
-        console.log("🗺️ Bound shadow map texture for second pass.");
-        // Render all chunks in the 3x3 grid around player
-        for (const chunk of this.chunks.values()) {
-            // Update instance buffers for this chunk
-            this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
-            this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
-            // Draw all cubes in this chunk
-            this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
-        }
     }
     getGUI() {
         return this.gui;

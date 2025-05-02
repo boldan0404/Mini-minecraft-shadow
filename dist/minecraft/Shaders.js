@@ -83,13 +83,11 @@ export const perlinCubeFSText = `
     precision mediump float;
     
     uniform vec4 uLightPos;
-    uniform float uTime;
     uniform sampler2D uShadowMap;
     uniform mat4 uLightViewProj;
     uniform bool uUseShadowVolumes; // New uniform to toggle shadow techniques
     uniform float uAmbientIntensity; // Control ambient light intensity
-    uniform int uAmbientOnly;           // Add this new uniform
-
+    uniform int uAmbientOnly;        // Add this new uniform
 
     varying vec4 normal;
     varying vec4 wsPos;
@@ -198,10 +196,6 @@ export const perlinCubeFSText = `
       float variation = perlin(uv * 25.0, 123.456 + position.x * 7.89, 20.0);
       color *= 0.9 + variation * 0.2;
       
-      // Animate subtle wind movement
-      float windEffect = sin(position.x * 0.1 + position.z * 0.1 + uTime * 0.01) * 0.05;
-      color *= 0.95 + windEffect;
-      
       return color;
     }
      
@@ -263,19 +257,16 @@ export const perlinCubeFSText = `
         return color;
     }
     
-    // Procedural texture for water blocks
+    // Procedural texture for water blocks - removed animation
     vec3 waterTexture(vec2 uv, vec3 position) {
         // Base water color
         vec3 baseColor = vec3(0.1, 0.3, 0.7);
         
-        // Animated ripples
-        float time = uTime * 0.01; // Slow time factor
+        // Static wave patterns
+        float wave1 = perlin(uv, 123.567, 4.0);
+        float wave2 = perlin(uv * 1.3, 765.432, 5.0);
         
-        // Multiple wave patterns in different directions
-        float wave1 = perlin(uv + vec2(time, time * 0.7), 123.567, 4.0);
-        float wave2 = perlin(uv + vec2(-time * 0.8, time * 0.5), 765.432, 5.0);
-        
-        // Combine waves for the final effect
+        // Combine waves for the static effect
         float waterPattern = (wave1 * 0.6 + wave2 * 0.4);
         
         // Add slight blue hue variations
@@ -298,8 +289,8 @@ export const perlinCubeFSText = `
         float largeNoise = perlin(uv, 111.222, 2.0); // Large undulations
         float smallNoise = perlin(uv * 6.0, 333.444, 10.0); // Small snow details
         
-        // Create sparkle effect
-        float sparkleNoise = perlin(uv * 20.0, 555.666 + uTime * 0.01, 8.0);
+        // Create static sparkle effect
+        float sparkleNoise = perlin(uv * 20.0, 555.666, 8.0);
         float sparkle = pow(sparkleNoise, 16.0) * 0.5;
         
         // Combine noise patterns
@@ -409,17 +400,17 @@ export const shadowVSText = `
 
     attribute vec4 aVertPos;
     attribute vec4 aOffset;
-    attribute float aBlockType; // ✅ NEW
+    attribute float aBlockType;
 
     uniform mat4 uLightViewProj;
 
     varying vec4 vClipSpacePos;
-    varying float vBlockType; // ✅ NEW
+    varying float vBlockType;
 
     void main() {
         vec4 worldPos = aVertPos + aOffset;
         vClipSpacePos = uLightViewProj * worldPos;
-         vBlockType = aBlockType; // ✅ Pass it through
+        vBlockType = aBlockType;
         gl_Position = vClipSpacePos;
     }
 `;
@@ -427,14 +418,13 @@ export const shadowFSText = `
     precision mediump float;
 
     varying vec4 vClipSpacePos;
-    varying float vBlockType; // ✅ NEW
+    varying float vBlockType;
 
     void main() {
     vec3 ndc = vClipSpacePos.xyz / vClipSpacePos.w;
     float depth = ndc.z * 0.5 + 0.5;
     gl_FragColor = vec4(depth); // store in red channel
     }
-
 `;
 export const debugQuadVSText = `
     precision mediump float;
@@ -456,6 +446,5 @@ void main() {
     vec4 color = texture2D(uTexture, vUV);
     gl_FragColor = color; // Show full color, not just .r!
 }
-
 `;
 //# sourceMappingURL=Shaders.js.map
