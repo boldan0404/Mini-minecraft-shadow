@@ -456,7 +456,7 @@ private isChunkOccluded(
     this.visibleChunks.clear();
     
     // Check rendering distance (adjust as needed for performance)
-    const renderDistance = 5;
+    const renderDistance = 2;
     
     // Generate 3x3 grid of chunks as before for physics
     // But use a larger area for checking visibility
