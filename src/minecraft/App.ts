@@ -28,6 +28,7 @@ export class MinecraftAnimation extends CanvasAnimation {
   private shadowVolumeEnabled: boolean = false; // Start with shadow mapping
 
   private visibleChunks: Set<string>;
+  private occlusionCulledChunks: Set<string> = new Set<string>();
 
 
   // Chunks management
@@ -166,6 +167,119 @@ export class MinecraftAnimation extends CanvasAnimation {
     // Configure drawing
     this.shadowVolumeRenderPass.setDrawData(gl.TRIANGLES, this.cubeGeometry.indicesFlat().length, gl.UNSIGNED_INT, 0);
     this.shadowVolumeRenderPass.setup();
+}
+
+private performOcclusionCulling(): void {
+  this.occlusionCulledChunks.clear();
+  
+  // Get camera position and direction
+  const camera = this.gui.getCamera();
+  const cameraPos = camera.pos();
+  const viewDir = camera.forward().negate();
+  
+  // First, sort chunks by distance from camera
+  const sortedChunks = Array.from(this.visibleChunks).map(key => {
+      const [x, z] = key.split(',').map(Number);
+      const distance = Math.sqrt(
+          Math.pow(x - cameraPos.x, 2) + 
+          Math.pow(z - cameraPos.z, 2)
+      );
+      return { key, distance, x, z };
+  }).sort((a, b) => a.distance - b.distance);
+  
+  // Create a heightmap to track occlusion
+  // This 2D grid will store the highest angle from camera to any visible terrain
+  const angleResolution = 60; // Number of angular samples
+  const maxDistance = this.chunkSize * 8; // Consider chunks up to this distance
+  const occlusionMap = Array(angleResolution).fill(-Infinity);
+  
+  // Process chunks from nearest to farthest
+  for (const { key, x, z } of sortedChunks) {
+      // Skip chunks that are too close - always render nearby chunks
+      const distSq = Math.pow(x - cameraPos.x, 2) + Math.pow(z - cameraPos.z, 2);
+      if (distSq < this.chunkSize * this.chunkSize * 2) {
+          continue;
+      }
+      
+      // Check if chunk is occluded
+      const isOccluded = this.isChunkOccluded(
+          x, z, cameraPos, occlusionMap, angleResolution, maxDistance
+      );
+      
+      if (isOccluded) {
+          this.occlusionCulledChunks.add(key);
+      }
+  }
+  
+  // Remove occluded chunks from visible set
+  for (const key of this.occlusionCulledChunks) {
+      this.visibleChunks.delete(key);
+  }
+}
+
+private isChunkOccluded(
+  chunkX: number, 
+  chunkZ: number, 
+  cameraPos: Vec3, 
+  occlusionMap: number[], 
+  angleResolution: number,
+  maxDistance: number
+): boolean {
+  // Get chunk from map
+  const chunk = this.chunks.get(`${chunkX},${chunkZ}`);
+  if (!chunk) return true; // If chunk doesn't exist, consider it occluded
+  
+  // Find the highest point in the chunk
+  let maxHeight = 0;
+  for (let i = 0; i < chunk.numCubes(); i++) {
+      const y = chunk.cubePositions()[i * 4 + 1];
+      if (y > maxHeight) maxHeight = y;
+  }
+  
+  // If chunk is empty, it's occluded
+  if (maxHeight === 0) return true;
+  
+  // Check chunk corners against occlusion map
+  const halfSize = this.chunkSize / 2;
+  const corners = [
+      { x: chunkX - halfSize, z: chunkZ - halfSize },
+      { x: chunkX + halfSize, z: chunkZ - halfSize },
+      { x: chunkX - halfSize, z: chunkZ + halfSize },
+      { x: chunkX + halfSize, z: chunkZ + halfSize }
+  ];
+  
+  // Test if ALL corners are occluded
+  let allCornersOccluded = true;
+  
+  for (const corner of corners) {
+      // Calculate vector from camera to corner
+      const dx = corner.x - cameraPos.x;
+      const dz = corner.z - cameraPos.z;
+      
+      // Get angle in xz plane (0-360 degrees)
+      let angle = Math.atan2(dz, dx) * 180 / Math.PI;
+      if (angle < 0) angle += 360;
+      
+      // Convert to occlusion map index
+      const angleIndex = Math.floor(angle / (360 / angleResolution)) % angleResolution;
+      
+      // Calculate distance
+      const distance = Math.sqrt(dx * dx + dz * dz);
+      if (distance > maxDistance) continue;
+      
+      // Calculate angle to the top of the chunk from camera
+      const angleToTop = Math.atan2(maxHeight - cameraPos.y, distance) * 180 / Math.PI;
+      
+      // If this corner's angle is greater than the occluded angle, it's visible
+      if (angleToTop > occlusionMap[angleIndex]) {
+          allCornersOccluded = false;
+          
+          // Update occlusion map with this height
+          occlusionMap[angleIndex] = angleToTop;
+      }
+  }
+  
+  return allCornersOccluded;
 }
 
   // shadow mapping
@@ -349,55 +463,58 @@ export class MinecraftAnimation extends CanvasAnimation {
     const chunksToKeep = new Set<string>();
     
     for (let x = -renderDistance; x <= renderDistance; x++) {
-        for (let z = -renderDistance; z <= renderDistance; z++) {
-            const chunkX = playerChunkX + x * this.chunkSize;
-            const chunkZ = playerChunkZ + z * this.chunkSize;
-            const key = `${chunkX},${chunkZ}`;
-            
-            // Always keep nearby chunks for physics
-            if (Math.abs(x) <= 1 && Math.abs(z) <= 1) {
-                chunksToKeep.add(key);
-            }
-            
-            // Calculate chunk bounding box
-            const halfSize = this.chunkSize / 2;
-            const centerX = chunkX;
-            const centerZ = chunkZ;
-            
-            // Get min/max heights in chunk (approximate)
-            let minY = 0;
-            let maxY = 80; // Adjust based on your terrain generation
-            
-            // If chunk exists, use its actual height range
-            const existingChunk = this.chunks.get(key);
-            if (existingChunk) {
-                // Determine actual height range if possible
-                // For now, we'll use a conservative estimate
-            }
-            
-            // Check if chunk bounding box is in frustum
-            if (frustum.boxInFrustum(
-                centerX - halfSize, minY, centerZ - halfSize,
-                centerX + halfSize, maxY, centerZ + halfSize
-            )) {
-                // Chunk is visible, mark it
-                this.visibleChunks.add(key);
-                
-                // Create chunk if needed
-                if (!this.chunks.has(key)) {
-                    const chunk = new Chunk(chunkX, chunkZ, this.chunkSize);
-                    this.chunks.set(key, chunk);
-                }
-            }
-        }
-    }
-    
-    // Remove chunks that are too far away
-    for (const key of this.chunks.keys()) {
-        if (!chunksToKeep.has(key) && !this.visibleChunks.has(key)) {
-            this.chunks.delete(key);
-        }
-    }
+      for (let z = -renderDistance; z <= renderDistance; z++) {
+          const chunkX = playerChunkX + x * this.chunkSize;
+          const chunkZ = playerChunkZ + z * this.chunkSize;
+          const key = `${chunkX},${chunkZ}`;
+          
+          // Always keep nearby chunks for physics
+          if (Math.abs(x) <= 1 && Math.abs(z) <= 1) {
+              chunksToKeep.add(key);
+          }
+          
+          // Calculate chunk bounding box
+          const halfSize = this.chunkSize / 2;
+          const centerX = chunkX;
+          const centerZ = chunkZ;
+          
+          // Get min/max heights in chunk (approximate)
+          let minY = 0;
+          let maxY = 80; // Adjust based on your terrain generation
+          
+          // If chunk exists, use its actual height range
+          const existingChunk = this.chunks.get(key);
+          if (existingChunk) {
+              // Determine actual height range if possible
+              // For now, we'll use a conservative estimate
+          }
+          
+          // Check if chunk bounding box is in frustum
+          if (frustum.boxInFrustum(
+              centerX - halfSize, minY, centerZ - halfSize,
+              centerX + halfSize, maxY, centerZ + halfSize
+          )) {
+              // Chunk is visible, mark it
+              this.visibleChunks.add(key);
+              
+              // Create chunk if needed
+              if (!this.chunks.has(key)) {
+                  const chunk = new Chunk(chunkX, chunkZ, this.chunkSize);
+                  this.chunks.set(key, chunk);
+              }
+          }
+      }
+  }
+  
+  // After frustum culling, perform occlusion culling
+  this.performOcclusionCulling();
+  
+  // Remove chunks that are too far away
+  for (const key of this.chunks.keys()) {
+      if (!chunksToKeep.has(key) && !this.visibleChunks.has(key)) {
+          this.chunks.delete(key);
+      }
+  }
 }
 
 
@@ -519,7 +636,12 @@ export class MinecraftAnimation extends CanvasAnimation {
     if (ctx2d) {
         ctx2d.clearRect(0, 0, this.canvas2d.width, this.canvas2d.height);
         this.gui.drawDebugInfo(ctx2d);
+
+        ctx2d.fillStyle = 'white';
+        ctx2d.font = '12px monospace';
+        ctx2d.fillText(`Occlusion culled: ${this.occlusionCulledChunks.size} chunks`, 10, 60);
     }
+    
 }
 
 private renderWithShadowMapping(): void {
@@ -638,7 +760,7 @@ private renderWithShadowVolumes(): void {
 }
 
 public getDebugStats(): string {
-  return `Loaded chunks: ${this.chunks.size}, Visible: ${this.visibleChunks.size}`;
+  return `Loaded chunks: ${this.chunks.size}, Visible after frustum: ${this.visibleChunks.size + this.occlusionCulledChunks.size}, After occlusion: ${this.visibleChunks.size}`;
 }
 
 public toggleShadowTechnique(): void {
