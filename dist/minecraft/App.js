@@ -77,7 +77,7 @@ export class MinecraftAnimation extends CanvasAnimation {
         this.shadowVolumeRenderPass = new RenderPass(gl, shadowVolumeVSText, shadowVolumeFSText);
         // Use shadow volume geometry (NOT cube geometry)
         this.shadowVolumeRenderPass.setIndexBufferData(shadowVolumeGeom.indices);
-        // Set up attributes with correct format
+        // Set up attributes with correct format and data
         this.shadowVolumeRenderPass.addAttribute("aVertPos", 4, gl.FLOAT, false, 8 * Float32Array.BYTES_PER_ELEMENT, 0, undefined, shadowVolumeGeom.positions);
         this.shadowVolumeRenderPass.addAttribute("aNorm", 3, gl.FLOAT, false, 8 * Float32Array.BYTES_PER_ELEMENT, 4 * Float32Array.BYTES_PER_ELEMENT, undefined, shadowVolumeGeom.positions);
         this.shadowVolumeRenderPass.addAttribute("aExtruded", 1, gl.FLOAT, false, 8 * Float32Array.BYTES_PER_ELEMENT, 7 * Float32Array.BYTES_PER_ELEMENT, undefined, shadowVolumeGeom.positions);
@@ -540,18 +540,19 @@ export class MinecraftAnimation extends CanvasAnimation {
         // Clear stencil buffer to 0
         gl.clearStencil(0);
         gl.clear(gl.STENCIL_BUFFER_BIT);
-        // Z-pass method
-        // Front faces: increment stencil where depth test passes
+        // Use Z-pass method (Carmack's Reverse)
+        // Front faces: increment stencil on depth pass
         gl.cullFace(gl.BACK);
         gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
         gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR_WRAP);
+        // Render all shadow volumes for visible chunks
         for (const [key, chunk] of this.chunks.entries()) {
             if (this.visibleChunks.has(key)) {
                 this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
                 this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
             }
         }
-        // Back faces: decrement stencil where depth test passes
+        // Back faces: decrement stencil on depth pass
         gl.cullFace(gl.FRONT);
         gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
         gl.stencilOp(gl.KEEP, gl.KEEP, gl.DECR_WRAP);
@@ -569,12 +570,12 @@ export class MinecraftAnimation extends CanvasAnimation {
         // Restore color and depth writing
         gl.colorMask(true, true, true, true);
         gl.depthMask(true);
-        gl.depthFunc(gl.LEQUAL); // Use LEQUAL, not LESS
+        gl.depthFunc(gl.LEQUAL); // Important: Use LEQUAL, not LESS
         gl.cullFace(gl.BACK);
         // Only render where stencil is 0 (not in shadow)
         gl.stencilFunc(gl.EQUAL, 0, 0xFF);
         gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-        // Render with full lighting
+        // Render with full lighting - only where not in shadow
         this.ambientOnlyMode = false;
         for (const [key, chunk] of this.chunks.entries()) {
             if (this.visibleChunks.has(key)) {
@@ -587,12 +588,12 @@ export class MinecraftAnimation extends CanvasAnimation {
         gl.depthFunc(gl.LESS);
     }
     createShadowVolumeGeometry() {
+        // Create geometry that extends far enough
         const cubeVertices = this.cubeGeometry.positionsFlat();
         const cubeIndices = this.cubeGeometry.indicesFlat();
         const cubeNormals = this.cubeGeometry.normalsFlat();
-        // Create shadow volume geometry (front cap + back cap + sides)
+        // Create shadow volume geometry (front cap + back cap + silhouette edges)
         const positions = new Float32Array(48 * 8); // 48 vertices, 8 components each
-        const indices = new Uint32Array(72 + 144); // 36 triangles for caps + 24 quads for sides
         // Fill vertex data with position + normal + extruded flag
         for (let i = 0; i < 24; i++) {
             // Front cap (original vertices)
@@ -601,9 +602,11 @@ export class MinecraftAnimation extends CanvasAnimation {
             positions[offset + 1] = cubeVertices[i * 4 + 1];
             positions[offset + 2] = cubeVertices[i * 4 + 2];
             positions[offset + 3] = cubeVertices[i * 4 + 3];
-            positions[offset + 4] = cubeNormals[i * 4 + 0];
-            positions[offset + 5] = cubeNormals[i * 4 + 1];
-            positions[offset + 6] = cubeNormals[i * 4 + 2];
+            // Use the normal from normals array, not zero padding
+            const normalIndex = Math.floor(i / 4) * 4; // One normal per face
+            positions[offset + 4] = cubeNormals[normalIndex * 3 + 0];
+            positions[offset + 5] = cubeNormals[normalIndex * 3 + 1];
+            positions[offset + 6] = cubeNormals[normalIndex * 3 + 2];
             positions[offset + 7] = 0.0; // Not extruded
             // Back cap (extruded vertices)
             const offsetExt = (i + 24) * 8;
@@ -611,12 +614,13 @@ export class MinecraftAnimation extends CanvasAnimation {
             positions[offsetExt + 1] = cubeVertices[i * 4 + 1];
             positions[offsetExt + 2] = cubeVertices[i * 4 + 2];
             positions[offsetExt + 3] = cubeVertices[i * 4 + 3];
-            positions[offsetExt + 4] = cubeNormals[i * 4 + 0];
-            positions[offsetExt + 5] = cubeNormals[i * 4 + 1];
-            positions[offsetExt + 6] = cubeNormals[i * 4 + 2];
+            positions[offsetExt + 4] = cubeNormals[normalIndex * 3 + 0];
+            positions[offsetExt + 5] = cubeNormals[normalIndex * 3 + 1];
+            positions[offsetExt + 6] = cubeNormals[normalIndex * 3 + 2];
             positions[offsetExt + 7] = 1.0; // Extruded
         }
-        // Set up indices for caps
+        // Create indices for proper cube edges
+        const indices = new Uint32Array(216); // 36 tris for caps + 60 tris for sides
         let idx = 0;
         // Front cap indices (original orientation)
         for (let i = 0; i < 36; i++) {
@@ -628,17 +632,16 @@ export class MinecraftAnimation extends CanvasAnimation {
             indices[idx++] = cubeIndices[i * 3 + 2] + 24;
             indices[idx++] = cubeIndices[i * 3 + 1] + 24;
         }
-        // Side faces connecting front and back caps
-        const edgeMap = [
-            // each face has 4 edges, defined by vertex pairs
-            [0, 1], [1, 2], [2, 3], [3, 0], // top
-            [4, 5], [5, 6], [6, 7], [7, 4], // left
-            [8, 9], [9, 10], [10, 11], [11, 8], // right
-            [12, 13], [13, 14], [14, 15], [15, 12], // front
-            [16, 17], [17, 18], [18, 19], [19, 16], // back
-            [20, 21], [21, 22], [22, 23], [23, 20], // bottom
+        // Silhouette edges (12 edges * 2 triangles per edge = 24 triangles)
+        const edges = [
+            // Bottom face edges
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            // Top face edges  
+            [4, 7], [7, 6], [6, 5], [5, 4],
+            // Vertical edges
+            [0, 4], [1, 5], [2, 6], [3, 7]
         ];
-        for (const [v1, v2] of edgeMap) {
+        for (const [v1, v2] of edges) {
             // Create a quad for each edge
             indices[idx++] = v1;
             indices[idx++] = v2;

@@ -14,9 +14,13 @@ export const shadowVolumeVSText = `
         vec4 worldPos = aVertPos + aOffset;
         
         if (aExtruded > 0.5) {
-            // Extrude away from light by a large distance
-            vec3 lightDir = normalize(worldPos.xyz - uLightPos.xyz);
-            worldPos.xyz += lightDir * 100000.0;  // Increased distance for better results
+            // Calculate proper light direction
+            vec3 lightDir = worldPos.xyz - uLightPos.xyz;
+            vec3 lightDirNorm = normalize(lightDir);
+            
+            // Extrude along light direction to infinity
+            worldPos.xyz += lightDirNorm * 10000.0;  // Large but finite distance
+            worldPos.w = 0.0;  // Point at infinity
         }
         
         gl_Position = uProj * uView * worldPos;
