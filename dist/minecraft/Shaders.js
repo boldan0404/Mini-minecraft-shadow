@@ -1,55 +1,35 @@
 export const shadowVolumeVSText = `
-    precision mediump float;
+    precision highp float;
 
-uniform mat4 uView;
-uniform mat4 uProj;
-uniform vec4 uLightPos;
+    uniform mat4 uView;
+    uniform mat4 uProj;
+    uniform vec4 uLightPos;
 
-attribute vec4 aVertPos;
-attribute vec4 aNorm;
-attribute vec4 aOffset;
-attribute float aBlockType;
+    attribute vec4 aVertPos;    // Position
+    attribute vec3 aNorm;       // Normal (vec3, not vec4!)
+    attribute vec4 aOffset;     // Offset for instancing
+    attribute float aExtruded;  // Flag indicating if vertex should be extruded
 
-varying vec4 vColor; // For debugging
-
-void main() {
-    // Calculate world position
-    vec4 worldPos = aVertPos + aOffset;
-    
-    // Get normal in world space (assuming it's already normalized)
-    vec3 normal = aNorm.xyz;
-    
-    // Calculate light direction (from vertex to light)
-    vec3 lightDir = normalize(uLightPos.xyz - worldPos.xyz);
-    
-    // Dot product determines if face is facing away from light
-    float facingLight = dot(normal, lightDir);
-    
-    // Extrude vertices along the ray from light to vertex
-    // Use a large extrusion value to ensure it goes beyond far plane
-    vec3 extrusionDir = worldPos.xyz - uLightPos.xyz;
-    float extrusionLength = 10000.0; // Very large extrusion
-    
-    // Always extrude, but we'll handle culling differently in the draw calls
-    if (facingLight < 0.0) {
-        worldPos.xyz += normalize(extrusionDir) * extrusionLength;
-        vColor = vec4(1.0, 0.0, 0.0, 0.3); // Red for debugging
-    } else {
-        vColor = vec4(0.0, 1.0, 0.0, 0.3); // Green for debugging
+    void main() {
+        vec4 worldPos = aVertPos + aOffset;
+        
+        if (aExtruded > 0.5) {
+            // Extrude away from light by a large distance
+            vec3 lightDir = normalize(worldPos.xyz - uLightPos.xyz);
+            worldPos.xyz += lightDir * 100000.0;  // Increased distance for better results
+        }
+        
+        gl_Position = uProj * uView * worldPos;
     }
-    
-    gl_Position = uProj * uView * worldPos;
-}
 `;
 export const shadowVolumeFSText = `
-    precision mediump float;
+    precision highp float;
 
-varying vec4 vColor; // For debugging
-
-void main() {
-    // For visual debugging of shadow volumes
-    gl_FragColor = vColor;
-}
+    void main() {
+        // Don't discard when using shadow volumes!
+        // We need the fragments to be rasterized for the stencil test
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+    }
 `;
 export const perlinCubeVSText = `
     precision mediump float;

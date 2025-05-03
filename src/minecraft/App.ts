@@ -82,15 +82,33 @@ export class MinecraftAnimation extends CanvasAnimation {
 
     this.canvas2d = document.getElementById("textCanvas") as HTMLCanvasElement;
     
-    this.ctx = Debugger.makeDebugContext(this.ctx);
+    const contextAttributes = {
+        alpha: false,
+        depth: true,
+        stencil: true,
+        antialias: true,
+        preserveDrawingBuffer: false,
+        premultipliedAlpha: false,
+        powerPreference: "high-performance"
+    };
+    
+    const ctx = this.c.getContext("webgl2", contextAttributes) as WebGL2RenderingContext | null;
+    
+    if (!ctx) {
+        throw new Error("WebGL2 not supported");
+    }
+    
+    this.ctx = ctx;
+    
+    // Verify stencil buffer is available
+    const attrs = ctx.getContextAttributes();
+    if (!attrs?.stencil) {
+        console.error("⚠️ Stencil buffer not available! Shadow volumes will be disabled.");
+        this.shadowVolumeEnabled = false;
+    } else {
+        console.log("✅ Stencil buffer is available.");
+    }
     let gl = this.ctx;
-
-    const contextAttributes = gl.getContextAttributes();
-  if (contextAttributes) {
-    console.log("Has stencil buffer:", contextAttributes.stencil);
-  } else {
-    console.warn("Could not retrieve context attributes, stencil buffer status unknown");
-  }
     this.visibleChunks = new Set<string>();
 
     this.time = 0;
@@ -121,34 +139,37 @@ export class MinecraftAnimation extends CanvasAnimation {
   private initShadowVolume(): void {
     const gl = this.ctx;
     
+    // Create proper shadow volume geometry
+    const shadowVolumeGeom = this.createShadowVolumeGeometry();
+    
     // Create shadow volume render pass
     this.shadowVolumeRenderPass = new RenderPass(gl, shadowVolumeVSText, shadowVolumeFSText);
     
-    // Set up geometry and shader attributes/uniforms
-    this.shadowVolumeRenderPass.setIndexBufferData(this.cubeGeometry.indicesFlat());
+    // Use shadow volume geometry (NOT cube geometry)
+    this.shadowVolumeRenderPass.setIndexBufferData(shadowVolumeGeom.indices);
     
+    // Set up attributes with correct format
     this.shadowVolumeRenderPass.addAttribute(
         "aVertPos", 4, gl.FLOAT, false,
-        4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
-        this.cubeGeometry.positionsFlat()
+        8 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
+        shadowVolumeGeom.positions
     );
     
     this.shadowVolumeRenderPass.addAttribute(
-        "aNorm", 4, gl.FLOAT, false,
-        4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
-        this.cubeGeometry.normalsFlat()
+        "aNorm", 3, gl.FLOAT, false,
+        8 * Float32Array.BYTES_PER_ELEMENT, 4 * Float32Array.BYTES_PER_ELEMENT, undefined,
+        shadowVolumeGeom.positions
+    );
+    
+    this.shadowVolumeRenderPass.addAttribute(
+        "aExtruded", 1, gl.FLOAT, false,
+        8 * Float32Array.BYTES_PER_ELEMENT, 7 * Float32Array.BYTES_PER_ELEMENT, undefined,
+        shadowVolumeGeom.positions
     );
     
     this.shadowVolumeRenderPass.addInstancedAttribute(
         "aOffset", 4, gl.FLOAT, false,
         4 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
-        new Float32Array(0)
-    );
-    
-    // Add block type attribute 
-    this.shadowVolumeRenderPass.addInstancedAttribute(
-        "aBlockType", 1, gl.FLOAT, false,
-        1 * Float32Array.BYTES_PER_ELEMENT, 0, undefined,
         new Float32Array(0)
     );
     
@@ -164,8 +185,8 @@ export class MinecraftAnimation extends CanvasAnimation {
         gl.uniformMatrix4fv(loc, false, new Float32Array(this.gui.projMatrix().all()));
     });
     
-    // Configure drawing
-    this.shadowVolumeRenderPass.setDrawData(gl.TRIANGLES, this.cubeGeometry.indicesFlat().length, gl.UNSIGNED_INT, 0);
+    // Set draw data to use the shadow volume geometry size
+    this.shadowVolumeRenderPass.setDrawData(gl.TRIANGLES, shadowVolumeGeom.indices.length, gl.UNSIGNED_INT, 0);
     this.shadowVolumeRenderPass.setup();
 }
 
@@ -685,21 +706,43 @@ private renderWithShadowMapping(): void {
 private renderWithShadowVolumes(): void {
   const gl = this.ctx;
   
-  // First pass - ambient light
+  // Ensure stencil buffer is available
+  const attrs = gl.getContextAttributes();
+  if (!attrs?.stencil) {
+      console.error("Stencil buffer not available, falling back to shadow mapping");
+      this.shadowVolumeEnabled = false;
+      this.renderWithShadowMapping();
+      return;
+  }
+  
+  // First pass: Ambient lighting
+  this.renderAmbientPass();
+  
+  // Second pass: Shadow volumes
+  this.renderShadowVolumePass();
+  
+  // Third pass: Final lighting
+  this.renderFinalPass();
+}
+
+private renderAmbientPass(): void {
+  const gl = this.ctx;
+  
   gl.colorMask(true, true, true, true);
   gl.depthMask(true);
+  gl.depthFunc(gl.LESS);
   gl.disable(gl.STENCIL_TEST);
   gl.enable(gl.DEPTH_TEST);
-  gl.depthFunc(gl.LESS);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
   
-  // Clear everything
+  // Clear all buffers
   const bg = this.backgroundColor;
   gl.clearColor(bg.r, bg.g, bg.b, bg.a);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
   
+  // Render ambient lighting
   this.ambientOnlyMode = true;
-  
-  // Render only visible chunks for the first pass
   for (const [key, chunk] of this.chunks.entries()) {
       if (this.visibleChunks.has(key)) {
           this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
@@ -707,47 +750,68 @@ private renderWithShadowVolumes(): void {
           this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
       }
   }
+}
+private renderShadowVolumePass(): void {
+  const gl = this.ctx;
   
-  // Second pass - shadow volumes
+  // Configure for shadow volume rendering
   gl.colorMask(false, false, false, false);
   gl.depthMask(false);
-  gl.enable(gl.DEPTH_TEST);
   gl.depthFunc(gl.LESS);
-  
+  gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.STENCIL_TEST);
   gl.stencilMask(0xFF);
-  gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
+  
+  // Clear stencil buffer to 0
+  gl.clearStencil(0);
   gl.clear(gl.STENCIL_BUFFER_BIT);
   
-  // For shadows, we need to consider ALL chunks that could cast shadows
-  // This is a limitation of standard shadow volumes
+  // Z-pass method
+  // Front faces: increment stencil where depth test passes
+  gl.cullFace(gl.BACK);
+  gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
+  gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR_WRAP);
+  
+  for (const [key, chunk] of this.chunks.entries()) {
+    if (this.visibleChunks.has(key)) {
+      this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+      this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
+    }
+  }
+  
+  
+  // Back faces: decrement stencil where depth test passes
   gl.cullFace(gl.FRONT);
-  gl.stencilOpSeparate(gl.BACK, gl.KEEP, gl.INCR_WRAP, gl.KEEP);
+  gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
+  gl.stencilOp(gl.KEEP, gl.KEEP, gl.DECR_WRAP);
   
-  for (const chunk of this.chunks.values()) {
+  for (const [key, chunk] of this.chunks.entries()) {
+    if (this.visibleChunks.has(key)) {
       this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
-      this.shadowVolumeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
       this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
+    }
   }
   
-  gl.cullFace(gl.BACK);
-  gl.stencilOpSeparate(gl.FRONT, gl.KEEP, gl.DECR_WRAP, gl.KEEP);
+}
+
+private renderFinalPass(): void {
+  const gl = this.ctx;
   
-  for (const chunk of this.chunks.values()) {
-      this.shadowVolumeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
-      this.shadowVolumeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
-      this.shadowVolumeRenderPass.drawInstanced(chunk.numCubes());
-  }
+  // Enable stencil testing
+  gl.enable(gl.STENCIL_TEST);
   
-  // Third pass - lit areas (only for visible chunks)
-  gl.cullFace(gl.BACK);
+  // Restore color and depth writing
   gl.colorMask(true, true, true, true);
+  gl.depthMask(true);
+  gl.depthFunc(gl.LEQUAL);  // Use LEQUAL, not LESS
+  gl.cullFace(gl.BACK);
+  
+  // Only render where stencil is 0 (not in shadow)
   gl.stencilFunc(gl.EQUAL, 0, 0xFF);
   gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-  gl.depthFunc(gl.LEQUAL);
   
+  // Render with full lighting
   this.ambientOnlyMode = false;
-  
   for (const [key, chunk] of this.chunks.entries()) {
       if (this.visibleChunks.has(key)) {
           this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
@@ -757,6 +821,81 @@ private renderWithShadowVolumes(): void {
   }
   
   gl.disable(gl.STENCIL_TEST);
+  gl.depthFunc(gl.LESS);
+}
+
+private createShadowVolumeGeometry(): { positions: Float32Array, indices: Uint32Array } {
+  const cubeVertices = this.cubeGeometry.positionsFlat();
+  const cubeIndices = this.cubeGeometry.indicesFlat();
+  const cubeNormals = this.cubeGeometry.normalsFlat();
+  
+  // Create shadow volume geometry (front cap + back cap + sides)
+  const positions = new Float32Array(48 * 8); // 48 vertices, 8 components each
+  const indices = new Uint32Array(72 + 144); // 36 triangles for caps + 24 quads for sides
+  
+  // Fill vertex data with position + normal + extruded flag
+  for (let i = 0; i < 24; i++) {
+      // Front cap (original vertices)
+      const offset = i * 8;
+      positions[offset + 0] = cubeVertices[i * 4 + 0];
+      positions[offset + 1] = cubeVertices[i * 4 + 1];
+      positions[offset + 2] = cubeVertices[i * 4 + 2];
+      positions[offset + 3] = cubeVertices[i * 4 + 3];
+      positions[offset + 4] = cubeNormals[i * 4 + 0];
+      positions[offset + 5] = cubeNormals[i * 4 + 1];
+      positions[offset + 6] = cubeNormals[i * 4 + 2];
+      positions[offset + 7] = 0.0; // Not extruded
+      
+      // Back cap (extruded vertices)
+      const offsetExt = (i + 24) * 8;
+      positions[offsetExt + 0] = cubeVertices[i * 4 + 0];
+      positions[offsetExt + 1] = cubeVertices[i * 4 + 1];
+      positions[offsetExt + 2] = cubeVertices[i * 4 + 2];
+      positions[offsetExt + 3] = cubeVertices[i * 4 + 3];
+      positions[offsetExt + 4] = cubeNormals[i * 4 + 0];
+      positions[offsetExt + 5] = cubeNormals[i * 4 + 1];
+      positions[offsetExt + 6] = cubeNormals[i * 4 + 2];
+      positions[offsetExt + 7] = 1.0; // Extruded
+  }
+  
+  // Set up indices for caps
+  let idx = 0;
+  
+  // Front cap indices (original orientation)
+  for (let i = 0; i < 36; i++) {
+      indices[idx++] = cubeIndices[i];
+  }
+  
+  // Back cap indices (reversed orientation)
+  for (let i = 0; i < 12; i++) {
+      indices[idx++] = cubeIndices[i * 3 + 0] + 24;
+      indices[idx++] = cubeIndices[i * 3 + 2] + 24;
+      indices[idx++] = cubeIndices[i * 3 + 1] + 24;
+  }
+  
+  // Side faces connecting front and back caps
+  const edgeMap = [
+      // each face has 4 edges, defined by vertex pairs
+      [0, 1], [1, 2], [2, 3], [3, 0], // top
+      [4, 5], [5, 6], [6, 7], [7, 4], // left
+      [8, 9], [9, 10], [10, 11], [11, 8], // right
+      [12, 13], [13, 14], [14, 15], [15, 12], // front
+      [16, 17], [17, 18], [18, 19], [19, 16], // back
+      [20, 21], [21, 22], [22, 23], [23, 20], // bottom
+  ];
+  
+  for (const [v1, v2] of edgeMap) {
+      // Create a quad for each edge
+      indices[idx++] = v1;
+      indices[idx++] = v2;
+      indices[idx++] = v2 + 24;
+      
+      indices[idx++] = v1;
+      indices[idx++] = v2 + 24;
+      indices[idx++] = v1 + 24;
+  }
+  
+  return { positions, indices };
 }
 
 public getDebugStats(): string {
