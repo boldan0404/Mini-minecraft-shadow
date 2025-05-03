@@ -179,7 +179,7 @@ export class GUI implements IGUI {
     // Always capture important keys
 
     if (key.code === "KeyT") {
-      this.animation.toggleShadowTechnique();
+      this.animation.toggleRenderMode();
   }
   
     if (key.code === "KeyW" || key.code === "KeyA" ||

@@ -118,7 +118,7 @@ export class GUI {
     onKeydown(key) {
         // Always capture important keys
         if (key.code === "KeyT") {
-            this.animation.toggleShadowTechnique();
+            this.animation.toggleRenderMode();
         }
         if (key.code === "KeyW" || key.code === "KeyA" ||
             key.code === "KeyS" || key.code === "KeyD" ||

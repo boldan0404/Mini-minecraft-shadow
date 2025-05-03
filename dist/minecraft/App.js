@@ -9,6 +9,7 @@ export class MinecraftAnimation extends CanvasAnimation {
     constructor(canvas) {
         super(canvas);
         this.shadowVolumeEnabled = false; // Start with shadow mapping
+        this.renderMode = 'normal';
         this.occlusionCulledChunks = new Set();
         this.ambientOnlyMode = false;
         // day and night
@@ -94,6 +95,15 @@ export class MinecraftAnimation extends CanvasAnimation {
         // Set draw data to use the shadow volume geometry size
         this.shadowVolumeRenderPass.setDrawData(gl.TRIANGLES, shadowVolumeGeom.indices.length, gl.UNSIGNED_INT, 0);
         this.shadowVolumeRenderPass.setup();
+    }
+    toggleRenderMode() {
+        const modes = ['normal', 'shadow-mapping', 'shadow-volumes', 'ambient-occlusion'];
+        const currentIndex = modes.indexOf(this.renderMode);
+        const nextIndex = (currentIndex + 1) % modes.length;
+        this.renderMode = modes[nextIndex];
+        console.log(`%c🔄 Render mode changed to: ${this.renderMode}`, 'color: orange; font-weight: bold;');
+        // Update shadow technique based on mode
+        this.shadowVolumeEnabled = this.renderMode === 'shadow-volumes';
     }
     performOcclusionCulling() {
         this.occlusionCulledChunks.clear();
@@ -442,20 +452,62 @@ export class MinecraftAnimation extends CanvasAnimation {
         gl.enable(gl.CULL_FACE);
         gl.frontFace(gl.CCW);
         gl.cullFace(gl.BACK);
-        // Choose rendering technique
-        if (this.shadowVolumeEnabled) {
-            this.renderWithShadowVolumes();
-        }
-        else {
-            this.renderWithShadowMapping();
+        switch (this.renderMode) {
+            case 'normal':
+                this.renderNormal();
+                break;
+            case 'shadow-mapping':
+                this.renderWithShadowMapping();
+                break;
+            case 'shadow-volumes':
+                this.renderWithShadowVolumes();
+                break;
+            case 'ambient-occlusion':
+                this.renderWithAmbientOcclusion();
+                break;
         }
         const ctx2d = this.canvas2d.getContext('2d');
         if (ctx2d) {
             ctx2d.clearRect(0, 0, this.canvas2d.width, this.canvas2d.height);
             this.gui.drawDebugInfo(ctx2d);
+            // Add render mode info
             ctx2d.fillStyle = 'white';
-            ctx2d.font = '12px monospace';
-            ctx2d.fillText(`Occlusion culled: ${this.occlusionCulledChunks.size} chunks`, 10, 60);
+            ctx2d.font = '14px monospace';
+            ctx2d.fillText(`Render Mode: ${this.renderMode}`, 10, 80);
+            ctx2d.fillText('Press T to cycle render modes', 10, 100);
+        }
+    }
+    renderNormal() {
+        const gl = this.ctx;
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LESS);
+        gl.enable(gl.CULL_FACE);
+        gl.cullFace(gl.BACK);
+        // Render without any shadow effects
+        this.ambientOnlyMode = false;
+        for (const [key, chunk] of this.chunks.entries()) {
+            if (this.visibleChunks.has(key)) {
+                this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+                this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+                this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+            }
+        }
+    }
+    renderWithAmbientOcclusion() {
+        const gl = this.ctx;
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LESS);
+        gl.enable(gl.CULL_FACE);
+        gl.cullFace(gl.BACK);
+        // Render with ambient occlusion
+        this.ambientOnlyMode = false;
+        // Simple vertex-based ambient occlusion
+        for (const [key, chunk] of this.chunks.entries()) {
+            if (this.visibleChunks.has(key)) {
+                this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
+                this.blankCubeRenderPass.updateAttributeBuffer("aBlockType", chunk.blockTypes());
+                this.blankCubeRenderPass.drawInstanced(chunk.numCubes());
+            }
         }
     }
     renderWithShadowMapping() {
@@ -754,6 +806,9 @@ export class MinecraftAnimation extends CanvasAnimation {
         this.blankCubeRenderPass.addInstancedAttribute("aBlockType", 1, this.ctx.FLOAT, false, 1 * Float32Array.BYTES_PER_ELEMENT, 0, undefined, new Float32Array(0));
         this.blankCubeRenderPass.addUniform("uAmbientOnly", (gl, loc) => {
             gl.uniform1i(loc, this.ambientOnlyMode ? 1 : 0);
+        });
+        this.blankCubeRenderPass.addUniform("uUseAmbientOcclusion", (gl, loc) => {
+            gl.uniform1i(loc, this.renderMode === 'ambient-occlusion' ? 1 : 0);
         });
         this.blankCubeRenderPass.addUniform("uLightPos", (gl, loc) => {
             gl.uniform4fv(loc, this.lightPosition.xyzw);

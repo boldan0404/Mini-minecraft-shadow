@@ -72,6 +72,8 @@ export const perlinCubeFSText = `
     uniform bool uUseShadowVolumes; // New uniform to toggle shadow techniques
     uniform float uAmbientIntensity; // Control ambient light intensity
     uniform int uAmbientOnly;        // Add this new uniform
+    uniform bool uUseAmbientOcclusion;  // New uniform
+
 
     varying vec4 normal;
     varying vec4 wsPos;
@@ -92,6 +94,22 @@ export const perlinCubeFSText = `
     // Improved mixing function for smooth derivatives
     float smoothmix(float a0, float a1, float w) {
         return (a1 - a0) * (3.0 - w * 2.0) * w * w + a0;
+    }
+
+    float calculateVertexAO() {
+        // Check neighboring blocks by sampling from cube positions
+        vec3 localPos = fract(wsPos.xyz + 0.5);
+        
+        // Simple AO calculation based on position within the cube
+        float ao = 1.0;
+        
+        // Darken corners and edges
+        ao *= mix(0.6, 1.0, distance(localPos, vec3(0.5, 0.5, 0.5)));
+        
+        // Darken depending on face orientation
+        ao *= 0.8 + 0.2 * dot(normal.xyz, vec3(0.0, 1.0, 0.0));
+        
+        return ao;
     }
     
     // Perlin noise implementation
@@ -357,6 +375,11 @@ export const perlinCubeFSText = `
     float ambientStrength = uAmbientIntensity;
     vec3 ka = kd * ambientStrength;
     
+    if (uUseAmbientOcclusion) {
+            float ao = calculateVertexAO();
+            ka *= ao;
+        }
+
     // Check if we should render ambient-only
     if (uAmbientOnly == 1) {
         // Ambient only for shadowed areas
