@@ -120,6 +120,9 @@ export class GUI {
         if (key.code === "KeyT") {
             this.animation.toggleRenderMode();
         }
+        if (key.code === "KeyP") {
+            this.animation.printPerformanceData();
+        }
         if (key.code === "KeyW" || key.code === "KeyA" ||
             key.code === "KeyS" || key.code === "KeyD" ||
             key.code === "Space" || key.code === "KeyR" ||

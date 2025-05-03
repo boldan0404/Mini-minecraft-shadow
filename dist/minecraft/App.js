@@ -11,6 +11,12 @@ export class MinecraftAnimation extends CanvasAnimation {
         this.shadowVolumeEnabled = false; // Start with shadow mapping
         this.renderMode = 'normal';
         this.occlusionCulledChunks = new Set();
+        this.frameTimes = {
+            'normal': [],
+            'shadow-mapping': [],
+            'shadow-volumes': [],
+            'ambient-occlusion': []
+        };
         this.ambientOnlyMode = false;
         // day and night
         // private timeOfDay: number = 0.25; // Start at sunrise
@@ -371,6 +377,7 @@ export class MinecraftAnimation extends CanvasAnimation {
         const camera = this.gui.getCamera();
         const walkDelta = this.gui.walkDir();
         const gl = this.ctx;
+        const startTime = performance.now();
         // Update Light View-Projection Matrix for shadow mapping
         const lightPos = new Vec3([this.lightPosition.x, this.lightPosition.y, this.lightPosition.z]);
         const camPos = camera.pos();
@@ -466,6 +473,12 @@ export class MinecraftAnimation extends CanvasAnimation {
                 this.renderWithAmbientOcclusion();
                 break;
         }
+        const endTime = performance.now();
+        const frameTime = endTime - startTime;
+        this.frameTimes[this.renderMode].push(frameTime);
+        if (this.frameTimes[this.renderMode].length > 60) {
+            this.frameTimes[this.renderMode].shift();
+        }
         const ctx2d = this.canvas2d.getContext('2d');
         if (ctx2d) {
             ctx2d.clearRect(0, 0, this.canvas2d.width, this.canvas2d.height);
@@ -475,7 +488,25 @@ export class MinecraftAnimation extends CanvasAnimation {
             ctx2d.font = '14px monospace';
             ctx2d.fillText(`Render Mode: ${this.renderMode}`, 10, 80);
             ctx2d.fillText('Press T to cycle render modes', 10, 100);
+            const times = this.frameTimes[this.renderMode];
+            if (times.length > 0) {
+                const avgFrameTime = times.reduce((a, b) => a + b, 0) / times.length;
+                ctx2d.fillText(`Frame Time: ${avgFrameTime.toFixed(2)}ms`, 10, 120);
+                ctx2d.fillText(`FPS: ${(1000 / avgFrameTime).toFixed(1)}`, 10, 140);
+            }
         }
+    }
+    printPerformanceData() {
+        console.log('Performance Comparison:');
+        // Alternative to Object.entries that works with all TypeScript versions
+        const modes = ['normal', 'shadow-mapping', 'shadow-volumes', 'ambient-occlusion'];
+        modes.forEach(mode => {
+            const times = this.frameTimes[mode];
+            if (times.length > 0) {
+                const avgTime = times.reduce((a, b) => a + b, 0) / times.length;
+                console.log(`${mode}: ${avgTime.toFixed(2)}ms (${(1000 / avgTime).toFixed(1)} FPS)`);
+            }
+        });
     }
     renderNormal() {
         const gl = this.ctx;
