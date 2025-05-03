@@ -375,10 +375,11 @@ export const perlinCubeFSText = `
     float ambientStrength = uAmbientIntensity;
     vec3 ka = kd * ambientStrength;
     
+    // Apply ambient occlusion ONLY in AO mode
     if (uUseAmbientOcclusion) {
-            float ao = calculateVertexAO();
-            ka *= ao;
-        }
+        float ao = calculateVertexAO();
+        ka *= ao;
+    }
 
     // Check if we should render ambient-only
     if (uAmbientOnly == 1) {
@@ -387,10 +388,13 @@ export const perlinCubeFSText = `
         return;
     }
     
-    // Calculate shadow factor based on technique
+    // Skip shadow calculation completely in AO mode
     float shadow = 0.0;
-    if (!uUseShadowVolumes) {
-        // Shadow Mapping technique
+    if (uUseAmbientOcclusion) {
+        // In AO mode, don't calculate shadows at all
+        shadow = 0.0;
+    } else if (!uUseShadowVolumes) {
+        // Only calculate shadow mapping if not in shadow volumes mode
         shadow = calculateShadowMap();
     }
     

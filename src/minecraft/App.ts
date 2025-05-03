@@ -716,10 +716,12 @@ private isChunkOccluded(
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
     
+    // DON'T clear buffers here - they're already cleared in draw()
+    // This was causing the issue!
+    
     // Render with ambient occlusion
     this.ambientOnlyMode = false;
     
-    // Simple vertex-based ambient occlusion
     for (const [key, chunk] of this.chunks.entries()) {
       if (this.visibleChunks.has(key)) {
         this.blankCubeRenderPass.updateAttributeBuffer("aOffset", chunk.cubePositions());
@@ -1129,12 +1131,13 @@ public toggleShadowTechnique(): void {
       new Float32Array(0)
     );
 
-    this.blankCubeRenderPass.addUniform("uAmbientOnly", (gl, loc) => {
-      gl.uniform1i(loc, this.ambientOnlyMode ? 1 : 0);
-    });
-
     this.blankCubeRenderPass.addUniform("uUseAmbientOcclusion", (gl, loc) => {
       gl.uniform1i(loc, this.renderMode === 'ambient-occlusion' ? 1 : 0);
+    });
+
+    this.blankCubeRenderPass.addUniform("uAmbientOnly", (gl, loc) => {
+      // Only set ambient only for shadow volume pass, not for AO
+      gl.uniform1i(loc, this.ambientOnlyMode ? 1 : 0);
     });
 
     this.blankCubeRenderPass.addUniform("uLightPos",
@@ -1174,13 +1177,18 @@ public toggleShadowTechnique(): void {
     });
 
     this.blankCubeRenderPass.addUniform("uUseShadowVolumes", (gl, loc) => {
-      gl.uniform1i(loc, this.shadowVolumeEnabled ? 1 : 0);
-  });
+      gl.uniform1i(loc, this.renderMode === 'shadow-volumes' ? 1 : 0);
+    });
     
     // Add ambient light intensity uniform
     this.blankCubeRenderPass.addUniform("uAmbientIntensity", (gl, loc) => {
-      gl.uniform1f(loc, 0.3); // Default ambient intensity, you can make this a class property
-    });
+  // Use the same ambient intensity for both normal and AO modes
+  if (this.renderMode === 'normal' || this.renderMode === 'ambient-occlusion') {
+    gl.uniform1f(loc, 0.5);  // Same base lighting for both
+  } else {
+    gl.uniform1f(loc, 0.5);
+  }
+});
 
     this.blankCubeRenderPass.setDrawData(this.ctx.TRIANGLES, this.cubeGeometry.indicesFlat().length, this.ctx.UNSIGNED_INT, 0);
     this.blankCubeRenderPass.setup();
